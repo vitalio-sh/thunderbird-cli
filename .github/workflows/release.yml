@@ -38,16 +38,20 @@ jobs:
       - name: Find signed XPI
         id: xpi
         run: |
-          SIGNED_XPI=$(find dist/releases -name "thunderbird_ai_bridge-${{ steps.version.outputs.version }}-tb.xpi" | head -1)
+          # The Thunderbird extension version (in manifest.json) is independent of
+          # the npm/release version. We attach whichever signed XPI is in dist/releases/.
+          SIGNED_XPI=$(find dist/releases -name "*-tb.xpi" -type f | sort -V | tail -1)
           if [ -z "$SIGNED_XPI" ]; then
-            echo "::error::Signed XPI not found for version ${{ steps.version.outputs.version }}"
-            echo "Expected: dist/releases/thunderbird_ai_bridge-${{ steps.version.outputs.version }}-tb.xpi"
-            echo "Upload the ATN-signed XPI to dist/releases/ before tagging."
+            echo "::error::No signed XPI found in dist/releases/"
+            echo "Expected: dist/releases/*-tb.xpi"
+            echo "Upload an ATN-signed XPI to dist/releases/ before tagging."
             exit 1
           fi
           echo "signed=$SIGNED_XPI" >> "$GITHUB_OUTPUT"
-          UNSIGNED_XPI=$(find dist -maxdepth 1 -name "thunderbird-cli-${{ steps.version.outputs.version }}.xpi" | head -1)
+          echo "Found signed XPI: $SIGNED_XPI"
+          UNSIGNED_XPI=$(find dist -maxdepth 1 -name "thunderbird-cli-*.xpi" -type f | sort -V | tail -1)
           echo "unsigned=$UNSIGNED_XPI" >> "$GITHUB_OUTPUT"
+          echo "Found unsigned XPI: $UNSIGNED_XPI"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
