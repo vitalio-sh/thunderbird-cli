@@ -7,7 +7,12 @@
  * WebSocket server (port 7701) for Thunderbird extension.
  * Forwards: CLI HTTP → WebSocket → Extension → response.
  *
- * Usage: node bridge.js
+ * Usage: node bridge.js [--port 7700] [--ws-port 7701]
+ *
+ * Environment variables:
+ *   TB_BRIDGE_TIMEOUT  default per-request timeout in ms (default: 120000)
+ *
+ * Per-request override: HTTP clients can pass `X-TB-Timeout: <ms>` header.
  */
 
 import { createServer } from "http";
@@ -16,6 +21,7 @@ import { randomUUID } from "crypto";
 
 const HTTP_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--port") || "7700");
 const WS_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--ws-port") || "7701");
+const DEFAULT_TIMEOUT = parseInt(process.env.TB_BRIDGE_TIMEOUT || "120000");
 
 let extensionSocket = null;
 const pending = new Map(); // id → { resolve, reject, timer }
@@ -54,7 +60,7 @@ wss.on("connection", (ws) => {
 
 // ─── Forward request to extension ───────────────────────────────────
 
-function forwardToExtension(method, path, body) {
+function forwardToExtension(method, path, body, timeoutMs = DEFAULT_TIMEOUT) {
   return new Promise((resolve, reject) => {
     if (!extensionSocket || extensionSocket.readyState !== 1) {
       reject({ message: "Thunderbird extension not connected. Is Thunderbird running?" });
@@ -63,8 +69,8 @@ function forwardToExtension(method, path, body) {
     const id = randomUUID();
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject({ message: "Request timed out (30s)" });
-    }, 30000);
+      reject({ message: `Request timed out (${Math.round(timeoutMs / 1000)}s)` });
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
     extensionSocket.send(JSON.stringify({ id, method, path, body }));
   });
@@ -76,7 +82,7 @@ const httpServer = createServer(async (req, res) => {
   // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-TB-Timeout");
   res.setHeader("Content-Type", "application/json");
 
   if (req.method === "OPTIONS") {
@@ -92,6 +98,7 @@ const httpServer = createServer(async (req, res) => {
       extension: extensionSocket ? "connected" : "disconnected",
       httpPort: HTTP_PORT,
       wsPort: WS_PORT,
+      defaultTimeoutMs: DEFAULT_TIMEOUT,
     };
     res.writeHead(200);
     res.end(JSON.stringify(status));
@@ -113,9 +120,17 @@ const httpServer = createServer(async (req, res) => {
     }
   }
 
+  // Per-request timeout override via X-TB-Timeout header
+  let timeoutMs = DEFAULT_TIMEOUT;
+  const headerTimeout = req.headers["x-tb-timeout"];
+  if (headerTimeout) {
+    const parsed = parseInt(headerTimeout);
+    if (parsed > 0) timeoutMs = parsed;
+  }
+
   // Forward to extension
   try {
-    const result = await forwardToExtension(req.method, req.url, parsedBody);
+    const result = await forwardToExtension(req.method, req.url, parsedBody, timeoutMs);
     res.writeHead(200);
     res.end(JSON.stringify(result));
   } catch (err) {
@@ -128,5 +143,6 @@ const httpServer = createServer(async (req, res) => {
 httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
   console.log(`[bridge] HTTP server on http://127.0.0.1:${HTTP_PORT}`);
   console.log(`[bridge] WebSocket server on ws://127.0.0.1:${WS_PORT}`);
+  console.log(`[bridge] Default timeout: ${DEFAULT_TIMEOUT}ms (override via TB_BRIDGE_TIMEOUT env or X-TB-Timeout header)`);
   console.log(`[bridge] Waiting for Thunderbird extension to connect...`);
 });

@@ -1,6 +1,6 @@
 {
   "name": "thunderbird-cli-bridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "HTTP↔WebSocket bridge daemon between thunderbird-cli (or any HTTP client) and the Thunderbird WebExtension. Stateless proxy, localhost-only.",
   "type": "module",
   "bin": {

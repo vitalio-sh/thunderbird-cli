@@ -7,10 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-04-08
+
+### Fixed
+- **Bridge timeout was hardcoded at 30s**, causing SMTP send operations to fail silently when delivery took longer (typical for Migadu, Protonmail, and other providers with strict outbound checks).
+- Bridge now defaults to **120 seconds** and is fully configurable.
+
 ### Added
-- Automated GitHub Release workflow (attaches signed XPI to version tags)
-- `npm run build:xpi` build script for cross-platform XPI packaging
-- Demo GIF recording instructions in `assets/README.md`
+- `TB_BRIDGE_TIMEOUT` environment variable on the bridge daemon (default: 120000 ms)
+- `X-TB-Timeout` HTTP header for per-request override
+- CLI and MCP HTTP clients now propagate their `--timeout` value to the bridge via the new header
+- `defaultTimeoutMs` field in `/bridge/status` response (so clients can introspect)
+- Automated GitHub Release workflow (attaches signed XPI to version tags) — added in 1.0.0 dev cycle
+- `npm run build:xpi` build script for cross-platform XPI packaging — added in 1.0.0 dev cycle
+- Demo GIF recording instructions in `assets/README.md` — added in 1.0.0 dev cycle
 
 ## [1.0.0] — 2026-04-08
 

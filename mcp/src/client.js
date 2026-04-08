@@ -51,6 +51,8 @@ export async function api(method, path, body = null, timeout = 30000) {
   const url = `${BASE_URL}${path}`;
   const headers = { "Content-Type": "application/json" };
   if (config.authToken) headers["Authorization"] = `Bearer ${config.authToken}`;
+  // Tell the bridge how long it should wait for Thunderbird before giving up.
+  if (timeout) headers["X-TB-Timeout"] = String(timeout);
 
   const opts = { method, headers };
   if (body && (method === "POST" || method === "PUT")) {
