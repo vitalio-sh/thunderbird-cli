@@ -1,0 +1,38 @@
+{
+  "name": "thunderbird-cli",
+  "version": "1.0.0",
+  "description": "Low-level CLI + MCP server for AI agents to manage Mozilla Thunderbird email accounts.",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "cli",
+    "bridge",
+    "mcp"
+  ],
+  "scripts": {
+    "test": "node test/quick-test.mjs",
+    "test:mcp": "node test/mcp-test.mjs",
+    "bridge": "node bridge/bridge.js",
+    "tb": "node cli/src/cli.js",
+    "build:xpi": "node scripts/build-xpi.mjs"
+  },
+  "keywords": [
+    "thunderbird",
+    "email",
+    "cli",
+    "mcp",
+    "ai-agents",
+    "claude",
+    "imap"
+  ],
+  "author": "Vitalio Ionov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vitalio-sh/thunderbird-cli"
+  },
+  "devDependencies": {
+    "adm-zip": "^0.5.17",
+    "ws": "^8.20.0"
+  }
+}

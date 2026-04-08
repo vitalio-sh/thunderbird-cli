@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Syntax check all JS files
+        run: |
+          node -c cli/src/cli.js
+          node -c cli/src/client.js
+          node -c bridge/bridge.js
+          node -c mcp/src/server.js
+          node -c mcp/src/tools.js
+          node -c extension/src/background.js
+
+      - name: Run CLI/bridge integration tests (mock)
+        run: npm test
+
+      - name: Run MCP server integration tests (mock)
+        run: npm run test:mcp

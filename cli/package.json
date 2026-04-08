@@ -1,0 +1,42 @@
+{
+  "name": "thunderbird-cli",
+  "version": "1.0.0",
+  "description": "Low-level CLI to manage Mozilla Thunderbird email from the shell. 38 commands for search, read, compose, reply, attachments, folders, bulk ops. Designed for AI agents.",
+  "type": "module",
+  "bin": {
+    "tb": "./src/cli.js"
+  },
+  "files": [
+    "src/",
+    "README.md"
+  ],
+  "scripts": {
+    "prepublishOnly": "cd .. && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  },
+  "keywords": [
+    "thunderbird",
+    "email",
+    "cli",
+    "imap",
+    "ai-agents",
+    "claude",
+    "mcp"
+  ],
+  "author": "Vitalio Ionov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vitalio-sh/thunderbird-cli",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/vitalio-sh/thunderbird-cli/issues"
+  },
+  "homepage": "https://github.com/vitalio-sh/thunderbird-cli#readme"
+}

@@ -1,0 +1,84 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: |
+          npm test
+          npm run test:mcp
+
+      - name: Build unsigned XPI
+        run: npm run build:xpi
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Find signed XPI
+        id: xpi
+        run: |
+          SIGNED_XPI=$(find dist/releases -name "thunderbird_ai_bridge-${{ steps.version.outputs.version }}-tb.xpi" | head -1)
+          if [ -z "$SIGNED_XPI" ]; then
+            echo "::error::Signed XPI not found for version ${{ steps.version.outputs.version }}"
+            echo "Expected: dist/releases/thunderbird_ai_bridge-${{ steps.version.outputs.version }}-tb.xpi"
+            echo "Upload the ATN-signed XPI to dist/releases/ before tagging."
+            exit 1
+          fi
+          echo "signed=$SIGNED_XPI" >> "$GITHUB_OUTPUT"
+          UNSIGNED_XPI=$(find dist -maxdepth 1 -name "thunderbird-cli-${{ steps.version.outputs.version }}.xpi" | head -1)
+          echo "unsigned=$UNSIGNED_XPI" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## thunderbird-cli v${{ steps.version.outputs.version }}
+
+            ### Install the Thunderbird extension
+
+            Download **`thunderbird_ai_bridge-${{ steps.version.outputs.version }}-tb.xpi`** (signed by Mozilla via addons.thunderbird.net) and install via:
+            1. Thunderbird → **Add-ons and Themes**
+            2. ⚙ gear icon → **Install Add-on From File…**
+            3. Select the downloaded `.xpi`
+
+            ### Install the CLI and MCP server
+
+            ```bash
+            git clone https://github.com/vitalio-sh/thunderbird-cli
+            cd thunderbird-cli
+            npm install
+            ```
+
+            See [docs/SETUP.md](https://github.com/vitalio-sh/thunderbird-cli/blob/v${{ steps.version.outputs.version }}/docs/SETUP.md) for the full setup guide.
+
+            ### Changelog
+
+            See [CHANGELOG.md](https://github.com/vitalio-sh/thunderbird-cli/blob/v${{ steps.version.outputs.version }}/CHANGELOG.md) for details.
+          files: |
+            ${{ steps.xpi.outputs.signed }}
+            ${{ steps.xpi.outputs.unsigned }}

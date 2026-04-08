@@ -1,0 +1,32 @@
+{
+  "manifest_version": 2,
+  "name": "Thunderbird AI Bridge",
+  "version": "2.0.0",
+  "description": "Connects Thunderbird to AI agents via WebSocket bridge",
+  "author": "thunderbird-ai",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "thunderbird-ai@extension",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "accountsRead",
+    "accountsIdentities",
+    "addressBooks",
+    "compose",
+    "compose.save",
+    "compose.send",
+    "messagesRead",
+    "messagesMove",
+    "messagesDelete",
+    "messagesUpdate",
+    "messagesTags",
+    "messagesImport",
+    "accountsFolders",
+    "tabs"
+  ],
+  "background": {
+    "scripts": ["src/background.js"]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "thunderbird-cli-bridge",
+  "version": "1.0.0",
+  "description": "HTTP↔WebSocket bridge daemon between thunderbird-cli (or any HTTP client) and the Thunderbird WebExtension. Stateless proxy, localhost-only.",
+  "type": "module",
+  "bin": {
+    "tb-bridge": "./bridge.js"
+  },
+  "files": [
+    "bridge.js",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node bridge.js",
+    "prepublishOnly": "cd .. && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  },
+  "keywords": [
+    "thunderbird",
+    "email",
+    "bridge",
+    "websocket",
+    "ai-agents",
+    "mcp"
+  ],
+  "author": "Vitalio Ionov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vitalio-sh/thunderbird-cli",
+    "directory": "bridge"
+  },
+  "bugs": {
+    "url": "https://github.com/vitalio-sh/thunderbird-cli/issues"
+  },
+  "homepage": "https://github.com/vitalio-sh/thunderbird-cli#readme"
+}
