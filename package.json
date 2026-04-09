@@ -1,6 +1,6 @@
 {
   "name": "thunderbird-cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Low-level CLI + MCP server for AI agents to manage Mozilla Thunderbird email accounts.",
   "type": "module",
   "private": true,
@@ -25,7 +25,7 @@
     "claude",
     "imap"
   ],
-  "author": "Vitalio Ionov",
+  "author": "Vitalii Ionov",
   "license": "MIT",
   "repository": {
     "type": "git",
