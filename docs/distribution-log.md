@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | **Official MCP Registry** | 2026-04-18 | https://registry.modelcontextprotocol.io/servers/io.github.vitalio-sh/thunderbird-cli | ✅ live | v1.0.2. Canonical record; downstream registries pull from here. |
 | **PulseMCP** | n/a | https://www.pulsemcp.com | ⏳ auto-ingest | Form replaced with automatic ingestion from Official Registry. ~weekly cadence. |
-| **Smithery** | 2026-04-18 | (OAuth paused) | ⏸ blocked — email code | GitHub OAuth completed, requires 6-digit code sent to psnukcool@gmail.com to finish. Resume via https://smithery.ai/new. |
+| **Smithery** | 2026-04-18 | https://smithery.ai/servers/psnukcool/thunderbird-cli | ✅ published (pending build) | Qualified name `psnukcool/thunderbird-cli`. Published via `SMITHERY_API_KEY=<key> smithery mcp publish "https://github.com/vitalio-sh/thunderbird-cli" -n psnukcool/thunderbird-cli`. Note: Smithery assigns namespaces by primary-email handle (`psnukcool`), not GitHub handle. Follow-up: once build is green, add `--config-schema` describing `TB_BRIDGE_HOST` / `TB_BRIDGE_PORT` for better UX. |
 | **Glama** | n/a | https://glama.ai/mcp/servers | ⏳ auto-index | Auto-indexes from GitHub/npm within 24–48h of publish. Dockerfile added 2026-04-18 to unblock score check. Human action: after listing appears, sign in as vitalio-sh and click "Claim". |
 | **mcp.so** | 2026-04-18 | https://github.com/chatmcp/mcpso/issues/2107 | ⏳ queued | Submitted via GitHub issue. |
 | **LobeHub MCP** | — | https://lobehub.com/mcp | ⏳ pending | Auto-indexes from GitHub. |
