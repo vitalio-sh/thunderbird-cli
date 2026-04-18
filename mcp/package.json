@@ -1,7 +1,7 @@
 {
   "name": "thunderbird-cli-mcp",
   "mcpName": "io.github.vitalio-sh/thunderbird-cli",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP server that gives Claude Desktop full access to your email through Mozilla Thunderbird. 12 high-level tools: search, read, compose, reply, attachments, folders.",
   "type": "module",
   "bin": {

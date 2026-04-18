@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-04-18
+
+### Added
+- `server.json` at repo root, enabling submission to the Official MCP Registry (`io.github.vitalio-sh/thunderbird-cli`).
+- `mcpName` field in `mcp/package.json` — required by the MCP Registry to match an npm package to a server entry.
+
+### Changed
+- npm `keywords` expanded from 6–7 per package to the full 18-item discovery set per DISTRIBUTION-PLAN §2.2 (adds `mcp-server`, `anthropic`, `email-client`, `smtp`, `ai-agent`, `ai-tools`, `agentic`, `automation`, `localhost`, `privacy`).
+
+### No runtime changes
+Metadata-only release. No code changes since 1.0.1.
+
 ## [1.0.1] — 2026-04-08
 
 ### Fixed
