@@ -8,7 +8,9 @@
 [![Thunderbird](https://img.shields.io/badge/thunderbird-128%2B-blue)](https://www.thunderbird.net)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
 
-<!-- TODO: add demo.gif — see assets/README.md for recording instructions -->
+<p align="center">
+  <img src="assets/demo.gif" alt="thunderbird-cli demo — Claude answering an email-overview question via MCP" width="700">
+</p>
 
 ## Why
 
@@ -30,21 +32,19 @@ Tested at scale: **22 accounts, 249,000+ messages, 86,000+ unread** — all mana
 ## Quick Start
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/vitalio-sh/thunderbird-cli
-cd thunderbird-cli
-npm install
+# 1. Install CLI + bridge from npm
+npm install -g thunderbird-cli thunderbird-cli-bridge
 
 # 2. Install the signed Thunderbird extension
-#    Open Thunderbird → Add-ons → ⚙ → Install Add-on From File…
-#    Pick: dist/releases/thunderbird_ai_bridge-2.0.0-tb.xpi
+#    Download: https://github.com/vitalio-sh/thunderbird-cli/releases/latest
+#    Thunderbird → Add-ons → ⚙ → Install Add-on From File… → thunderbird_ai_bridge-*.xpi
 
 # 3. Start the bridge daemon (keep running)
-npm run bridge
+tb-bridge
 
 # 4. Try it
-npm run tb -- health
-npm run tb -- stats
+tb health
+tb stats
 ```
 
 Full setup guide (including background service, Docker, troubleshooting): **[docs/SETUP.md](docs/SETUP.md)**
@@ -82,8 +82,8 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 {
   "mcpServers": {
     "thunderbird": {
-      "command": "node",
-      "args": ["/absolute/path/to/thunderbird-cli/mcp/src/server.js"]
+      "command": "npx",
+      "args": ["-y", "thunderbird-cli-mcp"]
     }
   }
 }
@@ -100,15 +100,9 @@ Full MCP guide: **[mcp/README.md](mcp/README.md)**
 
 ## How It Works
 
-```
-                                            ┌─── Thunderbird Desktop
-                                            │    (your accounts)
-Host (macOS / Linux / Windows):             │
-                                            ↓
-  AI Agent (Claude Code, scripts) ─→ tb CLI ─┐
-                                              ├─→ Bridge ─→ Extension ─→ messenger.*
-  Claude Desktop ──────────────────→ tb-mcp ─┘   HTTP :7700  WebSocket :7701
-```
+<p align="center">
+  <img src="assets/architecture.png" alt="thunderbird-cli architecture — clients → npm entrypoints → bridge daemon → Thunderbird" width="900">
+</p>
 
 | Component | Role |
 |---|---|
@@ -118,6 +112,19 @@ Host (macOS / Linux / Windows):             │
 | **MCP** (`mcp/`) | `tb-mcp` server — 12 curated tools for Claude Desktop. |
 
 Thunderbird is the source of truth. The CLI never caches or stores email data.
+
+## How this compares
+
+| Tool | Credentials | AI-agent ready | Compose / send | Multi-account | Runtime |
+|---|---|---|---|---|---|
+| **thunderbird-cli** | stay in Thunderbird | ✅ CLI + MCP, JSON out | ✅ draft / open / send | ✅ any Thunderbird account | Node.js |
+| Raw IMAP libs (imapflow, imaplib) | you manage them | you wire it yourself | SMTP, separate | manual per account | varies |
+| [notmuch](https://notmuchmail.org) | via your MUA | CLI only, text output | ❌ reader only | via config | C |
+| [mu / mu4e](https://www.djcbsoftware.nl/code/mu/) | via your MUA | CLI only, sexp/text | ❌ reader only | via config | C |
+| [himalaya](https://github.com/soywod/himalaya) | in config files | ✅ CLI, JSON out | ✅ | ✅ | Rust |
+| [mutt / neomutt](http://www.mutt.org) | in muttrc | ❌ interactive TUI | ✅ | via config | C |
+
+The niche: **you already trust Thunderbird with your credentials and account state.** This tool surfaces that as a machine-readable API without asking you to re-configure IMAP/SMTP anywhere else.
 
 ## Documentation
 

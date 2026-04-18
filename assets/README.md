@@ -6,9 +6,9 @@ Demo GIFs, screenshots, and branding materials for the README and social preview
 
 | File | Used by | Status |
 |---|---|---|
-| `demo.gif` | Main README (top of fold) | ⏳ Not yet recorded |
-| `social-preview.png` | GitHub social preview (1280×640) | ⏳ Not yet created |
-| `architecture.png` | SPEC.md, README (optional) | ⏳ Not yet drawn |
+| `demo.gif` | Main README (top of fold) | ✅ Done (296 KB, Claude Desktop overview query) |
+| `social-preview.png` | GitHub social preview (1280×640) | ✅ Done (source: `social-preview.svg`) — upload via repo Settings → Social preview |
+| `architecture.png` | README "How It Works" | ✅ Done (source: `architecture.svg`, rendered via sharp) |
 
 ---
 
