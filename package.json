@@ -17,13 +17,24 @@
     "build:xpi": "node scripts/build-xpi.mjs"
   },
   "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude",
+    "claude-desktop",
+    "anthropic",
     "thunderbird",
     "email",
+    "email-client",
+    "imap",
+    "smtp",
     "cli",
-    "mcp",
-    "ai-agents",
-    "claude",
-    "imap"
+    "ai-agent",
+    "ai-tools",
+    "agentic",
+    "automation",
+    "localhost",
+    "privacy"
   ],
   "author": "Vitalii Ionov",
   "license": "MIT",

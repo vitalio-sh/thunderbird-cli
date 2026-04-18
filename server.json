@@ -1,0 +1,19 @@
+{
+  "name": "io.github.vitalio-sh/thunderbird-cli",
+  "description": "Give AI agents full read/write access to email through Mozilla Thunderbird. Zero credential exposure. 38 CLI commands, 12 MCP tools, signed Thunderbird 128+ extension.",
+  "repository": {
+    "url": "https://github.com/vitalio-sh/thunderbird-cli",
+    "source": "github"
+  },
+  "version_detail": {
+    "version": "1.0.1"
+  },
+  "packages": [
+    {
+      "registry_name": "npm",
+      "name": "thunderbird-cli-mcp",
+      "version": "1.0.1",
+      "runtime_hint": "npx"
+    }
+  ]
+}

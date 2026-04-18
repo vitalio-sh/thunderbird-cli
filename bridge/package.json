@@ -21,12 +21,26 @@
     "ws": "^8.17.0"
   },
   "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude",
+    "claude-desktop",
+    "anthropic",
     "thunderbird",
     "email",
+    "email-client",
+    "imap",
+    "smtp",
     "bridge",
     "websocket",
-    "ai-agents",
-    "mcp"
+    "cli",
+    "ai-agent",
+    "ai-tools",
+    "agentic",
+    "automation",
+    "localhost",
+    "privacy"
   ],
   "author": "Vitalii Ionov",
   "license": "MIT",
