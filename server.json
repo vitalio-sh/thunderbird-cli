@@ -1,19 +1,36 @@
 {
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.vitalio-sh/thunderbird-cli",
-  "description": "Give AI agents full read/write access to email through Mozilla Thunderbird. Zero credential exposure. 38 CLI commands, 12 MCP tools, signed Thunderbird 128+ extension.",
+  "description": "Give AI agents full read/write email access via Mozilla Thunderbird. Zero credentials.",
+  "version": "1.0.1",
   "repository": {
     "url": "https://github.com/vitalio-sh/thunderbird-cli",
     "source": "github"
   },
-  "version_detail": {
-    "version": "1.0.1"
-  },
   "packages": [
     {
-      "registry_name": "npm",
-      "name": "thunderbird-cli-mcp",
+      "registryType": "npm",
+      "identifier": "thunderbird-cli-mcp",
       "version": "1.0.1",
-      "runtime_hint": "npx"
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "TB_BRIDGE_HOST",
+          "description": "Hostname of the thunderbird-cli-bridge (default: 127.0.0.1). Set to host.docker.internal when running inside a container.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "TB_BRIDGE_PORT",
+          "description": "HTTP port of the thunderbird-cli-bridge (default: 7700).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        }
+      ]
     }
   ]
 }
