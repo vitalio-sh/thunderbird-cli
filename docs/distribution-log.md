@@ -56,6 +56,17 @@ None submitted yet.
 | AUR | — | https://aur.archlinux.org/packages/thunderbird-cli | — | PKGBUILD. |
 | nixpkgs | — | https://github.com/NixOS/nixpkgs | — | Derivation PR. |
 
+## Claude Skill
+
+| Artifact | Location | Status | Notes |
+|---|---|---|---|
+| `skills/thunderbird-cli/SKILL.md` | in-repo | ✅ shipped 2026-04-19 | Distributable Claude Skill covering the 12 MCP tools, token-efficient patterns, draft defaults, trust metadata, 7 common workflows, troubleshooting. Installs to `~/.claude/skills/` (Claude Code) or uploaded as zip to Claude.ai (Settings → Capabilities → Skills). |
+| `skills/thunderbird-cli/README.md` | in-repo | ✅ shipped 2026-04-19 | User-facing install guide for the skill. |
+| `AGENTS.md` | repo root | ✅ shipped 2026-04-19 | Cross-agent guide for AI agents editing *this codebase* (Cursor, Cline, Codex CLI, Windsurf, Aider, Claude Code). Different purpose from the end-user SKILL.md. |
+| `CLAUDE.md` | repo root | ✅ shipped 2026-04-19 | One-liner pointing at AGENTS.md — Claude Code reads this filename specifically. |
+
+**Note on distribution:** Anthropic's [`anthropics/skills`](https://github.com/anthropics/skills) repo is a curated Anthropic-only showcase, not open to community PRs. [agentskills.io](https://agentskills.io) is the open spec, not a submission registry. Primary distribution is our own repo + links from main README, `mcp/README.md`, and MCP Registry metadata. No separate "skill marketplace" submission exists today.
+
 ## Owned-channel drafts
 
 | Channel | Draft | Status |

@@ -112,6 +112,27 @@ Then in Claude Desktop config:
 |---|---|
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+## Recommended: also install the companion skill
+
+The MCP server gives Claude *access* to the email tools. The companion [Claude Skill](https://agentskills.io) teaches Claude *how to use them well* — token-efficient `fields` selection, draft-by-default safety, trust-metadata checks, recipes for common workflows.
+
+One command on Claude Code:
+
+```bash
+cp -r skills/thunderbird-cli ~/.claude/skills/
+```
+
+On Claude.ai, zip and upload at **Settings → Capabilities → Skills**:
+
+```bash
+cd skills && zip -r thunderbird-cli.zip thunderbird-cli
+# upload thunderbird-cli.zip
+```
+
+Full skill docs: [`skills/thunderbird-cli/SKILL.md`](https://github.com/vitalio-sh/thunderbird-cli/blob/main/skills/thunderbird-cli/SKILL.md).
+
+Skipping the skill is fine — the MCP still works — but with it, Claude's defaults get noticeably safer (never-auto-send, junk-excluded, truncated bodies) without the user having to re-prompt.
 | Linux | `~/.config/Claude/claude_desktop_config.json` |
 
 After editing, **restart Claude Desktop**. You should see "thunderbird" in the MCP servers list when you click the tool icon.

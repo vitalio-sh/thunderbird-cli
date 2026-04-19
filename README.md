@@ -98,6 +98,20 @@ Restart Claude Desktop. Now ask:
 
 Full MCP guide: **[mcp/README.md](mcp/README.md)**
 
+### Companion skill for Claude
+
+A [Claude Skill](https://agentskills.io) ships alongside the MCP server. It teaches Claude *how to use* the 12 email tools well — token-efficient field selection, draft-by-default safety, trust-metadata checking before acting on links, recipes for common workflows. Install it from **[`skills/thunderbird-cli/`](skills/thunderbird-cli/)**:
+
+```bash
+# Claude Code
+cp -r skills/thunderbird-cli ~/.claude/skills/
+
+# Claude.ai — zip and upload via Settings → Capabilities → Skills
+cd skills && zip -r thunderbird-cli.zip thunderbird-cli
+```
+
+Without the skill, the MCP still works. With it, Claude automatically uses the safest defaults and most efficient response shapes.
+
 ## How It Works
 
 <p align="center">
@@ -133,7 +147,9 @@ The niche: **you already trust Thunderbird with your credentials and account sta
 | [docs/SETUP.md](docs/SETUP.md) | Installation, background service, Docker, troubleshooting |
 | [docs/COMMANDS.md](docs/COMMANDS.md) | Full reference for all 38 CLI commands |
 | [docs/CLAUDE.md](docs/CLAUDE.md) | AI-agent-focused quick reference + security rules |
+| [skills/thunderbird-cli/SKILL.md](skills/thunderbird-cli/SKILL.md) | **Companion Claude Skill** — recipes, safety defaults, token patterns |
 | [mcp/README.md](mcp/README.md) | Claude Desktop integration guide |
+| [AGENTS.md](AGENTS.md) | Guide for AI agents editing this codebase |
 | [SPEC.md](SPEC.md) | Full technical specification |
 | [SECURITY.md](SECURITY.md) | Threat model, prompt-injection defenses |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Dev setup, code style, PR process |
