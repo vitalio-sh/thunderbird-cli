@@ -11,7 +11,7 @@
 | **Official MCP Registry** | 2026-04-18 | https://registry.modelcontextprotocol.io/servers/io.github.vitalio-sh/thunderbird-cli | ✅ live | v1.0.2. Canonical record; downstream registries pull from here. |
 | **PulseMCP** | n/a | https://www.pulsemcp.com | ⏳ auto-ingest | Form replaced with automatic ingestion from Official Registry. ~weekly cadence. |
 | **Smithery** | 2026-04-18 | https://smithery.ai/servers/psnukcool/thunderbird-cli | ✅ published (pending build) | Qualified name `psnukcool/thunderbird-cli`. Published via `SMITHERY_API_KEY=<key> smithery mcp publish "https://github.com/vitalio-sh/thunderbird-cli" -n psnukcool/thunderbird-cli`. Note: Smithery assigns namespaces by primary-email handle (`psnukcool`), not GitHub handle. Follow-up: once build is green, add `--config-schema` describing `TB_BRIDGE_HOST` / `TB_BRIDGE_PORT` for better UX. |
-| **Glama** | n/a | https://glama.ai/mcp/servers | ⏳ auto-index | Auto-indexes from GitHub/npm within 24–48h of publish. Dockerfile added 2026-04-18 to unblock score check. Human action: after listing appears, sign in as vitalio-sh and click "Claim". |
+| **Glama** | 2026-04-19 | expected https://glama.ai/mcp/servers/vitalio-sh/thunderbird-cli | ⏳ in review | Manual submission via "Add MCP Server" form 2026-04-19 08:18 UTC (in addition to auto-index from yesterday's npm publish). Dockerfile in repo unblocks score check. Human action: after listing appears, sign in as vitalio-sh, click "Claim", set category Communication→Email. Then I'll update punkpeye PR #5080 with the Glama score badge. |
 | **mcp.so** | 2026-04-18 | https://github.com/chatmcp/mcpso/issues/2107 | ⏳ queued | Submitted via GitHub issue. |
 | **LobeHub MCP** | — | https://lobehub.com/mcp | ⏳ pending | Auto-indexes from GitHub. |
 
