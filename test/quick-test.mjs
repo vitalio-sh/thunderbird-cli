@@ -22,7 +22,11 @@ function handle({ method, path, body }) {
   if (path === "/folders/create") return { success: true, folder: { id: "fn", name: body?.name } };
   if (path === "/folders/rename") return { success: true, folder: { id: body?.folderId, name: body?.newName } };
   if (path === "/folders/delete") return { success: true };
-  if (path === "/messages/search") return { messages: [{ id: 1, subject: "Test", author: "a@b.com", date: "2026-04-01", read: false, flagged: false, junk: false, size: 100, tags: [], folder: { accountId: "acct1", path: "/Inbox" } }], total: 1 };
+  if (path === "/messages/search") {
+    // Echo back search parameters so tests can verify they're forwarded correctly
+    const msgs = [{ id: 1, subject: "Test", author: "a@b.com", date: "2026-04-01", read: false, flagged: false, junk: false, size: 100, tags: [], folder: { accountId: "acct1", path: "/Inbox" }, _echo: body }];
+    return { messages: msgs, total: 1 };
+  }
   if (path === "/messages/list") return { messages: [{ id: 1, subject: "Test", author: "a@b.com", date: "2026-04-01", read: false, flagged: false, junk: false, size: 100, tags: ["$l1"], folder: { accountId: "acct1", path: "/Inbox" } }], total: 1 };
   if (path === "/messages/read-batch") return (body?.messageIds || []).map(id => ({ id, subject: "T", parts: { text: "Hello" } }));
   if (path === "/messages/fetch") return body?.messageId ? { downloaded: true, size: 100 } : { fetched: 2, total: 2 };
@@ -31,14 +35,14 @@ function handle({ method, path, body }) {
   if (path === "/messages/copy") return { success: true, copied: (body?.messageIds || []).length };
   if (path === "/messages/delete") return { success: true, deleted: (body?.messageIds || []).length };
   if (path === "/messages/update") return { success: true };
-  if (path?.match(/\/raw$/)) return { raw: "From: a@b\nSubject: T\n\nBody" };
+  if (path?.match(/\/raw$/)) return { raw: "Message-ID: <abc@host>\r\nReferences: <ref1@host> <ref2@host>\r\nIn-Reply-To: <ref2@host>\r\nSubject: Re: Test Topic\r\nFrom: a@b\r\n\r\nBody" };
   if (path?.match(/\/headers$/)) return { id: 1, subject: "T", author: "a@b" };
   if (path?.match(/\/full$/)) return { id: 1, subject: "T", parts: { text: "Hello", html: "<p>Hello</p>", attachments: [] } };
   if (path?.match(/\/check-download$/)) return { id: 1, downloadState: "full", size: 100, hasBody: true };
   if (path?.match(/\/download-status$/)) return { state: "full", size: 100 };
   if (path?.match(/\/attachments$/)) return [{ name: "f.pdf", contentType: "application/pdf", partName: "1.2", size: 5000 }];
   if (path?.match(/\/attachment$/) && method === "POST") return { name: "f.pdf", size: 5000, data: "SGVsbG8=" };
-  if (path?.match(/\/thread$/)) return { thread: [{ id: 1, subject: "T" }], count: 1 };
+  if (path?.match(/\/thread$/)) return { thread: [{ id: 1, subject: "T", date: "2026-04-01" }, { id: 2, subject: "Re: T", date: "2026-04-02" }], count: 2 };
   if (path?.match(/^\/messages\/\d+$/) && method === "GET") return { id: 1, subject: "T", author: "a@b", date: "2026-04-01", read: false, flagged: false, junk: false, size: 100, tags: ["$l1"], folder: null, parts: { text: "Hello world", html: "", attachments: [] } };
   if (path === "/tags") return [{ key: "$l1", tag: "Important", color: "#FF0000" }];
   if (path === "/tags/create") return { success: true, ...body };
@@ -141,13 +145,16 @@ test("POST /folders/delete", await httpCall("POST", "/folders/delete", { folderI
 console.log("\n\x1b[1mSearch & List\x1b[0m");
 test("POST /messages/search", await httpCall("POST", "/messages/search", { query: "test", limit: 25 }), r => r.messages?.length >= 0);
 test("POST /messages/list", await httpCall("POST", "/messages/list", { folderId: "f1", limit: 25 }), r => r.messages?.length >= 0);
+test("POST /messages/search forwards headerMessageId", await httpCall("POST", "/messages/search", { headerMessageId: "abc@host", limit: 5 }), r => r.messages?.[0]?._echo?.headerMessageId === "abc@host");
 
 console.log("\n\x1b[1mRead\x1b[0m");
 test("GET /messages/1", await httpCall("GET", "/messages/1"), r => r.id === 1 && r.parts);
 test("GET /messages/1/raw", await httpCall("GET", "/messages/1/raw"), r => r.raw);
 test("GET /messages/1/headers", await httpCall("GET", "/messages/1/headers"), r => r.id === 1);
 test("GET /messages/1/full", await httpCall("GET", "/messages/1/full"), r => r.parts?.html !== undefined);
-test("GET /messages/1/thread", await httpCall("GET", "/messages/1/thread"), r => r.thread);
+test("GET /messages/1/thread returns array", await httpCall("GET", "/messages/1/thread"), r => Array.isArray(r.thread));
+test("GET /messages/1/thread sorted by date", await httpCall("GET", "/messages/1/thread"), r => r.thread?.length >= 2 && r.thread[0].date <= r.thread[1].date);
+test("GET /messages/1/thread count matches", await httpCall("GET", "/messages/1/thread"), r => r.count === r.thread?.length);
 test("GET /messages/1/check-download", await httpCall("GET", "/messages/1/check-download"), r => r.downloadState);
 test("GET /messages/1/download-status", await httpCall("GET", "/messages/1/download-status"), r => r.state === "full");
 test("GET /messages/1/attachments", await httpCall("GET", "/messages/1/attachments"), r => Array.isArray(r));

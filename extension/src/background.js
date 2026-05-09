@@ -174,13 +174,14 @@ async function handleRequest({ method, path, body }) {
     const { query, accountId, fromAddress, toAddress, subject,
             unreadOnly, flagged, limit = 25, fromDate, toDate,
             folderId, tag, hasAttachment, sizeMin, sizeMax,
-            includeJunk } = body || {};
+            includeJunk, headerMessageId } = body || {};
     const q = {};
     if (query) q.body = query;
     if (accountId) q.accountId = accountId;
     if (fromAddress) q.author = fromAddress;
     if (toAddress) q.recipients = toAddress;
     if (subject) q.subject = subject;
+    if (headerMessageId) q.headerMessageId = headerMessageId;
     if (unreadOnly) q.unread = true;
     if (flagged !== undefined) q.flagged = flagged;
     if (fromDate) q.fromDate = new Date(fromDate);
@@ -405,22 +406,58 @@ async function handleRequest({ method, path, body }) {
   const threadMatch = path.match(/^\/messages\/(\d+)\/thread$/);
   if (threadMatch && method === "GET") {
     const msgId = parseInt(threadMatch[1]);
-    const full = await messenger.messages.getFull(msgId);
-    const refs = (full.headers?.["references"]?.[0] || "").split(/\s+/).filter(Boolean);
-    const inReply = full.headers?.["in-reply-to"]?.[0] || "";
-    const msgHdrId = full.headers?.["message-id"]?.[0] || "";
-    const ids = new Set([...refs, inReply, msgHdrId].filter(Boolean));
+
+    // getFull() doesn't reliably expose RFC 2822 headers; use getRaw() instead
+    let refs = [], inReply = "", msgHdrId = "", subject = "";
+    try {
+      const msg = await messenger.messages.get(msgId);
+      subject = msg?.subject || "";
+      const raw = await messenger.messages.getRaw(msgId);
+      if (typeof raw === "string") {
+        const headerSection = raw.split(/\r?\n\r?\n/)[0];
+        const unfolded = headerSection.replace(/\r?\n[ \t]+/g, " ");
+        const getHdr = (name) => { const m = unfolded.match(new RegExp(`^${name}:[ \\t]*(.+)`, "im")); return m ? m[1].trim() : ""; };
+        const stripBrackets = (s) => s.replace(/^<|>$/g, "").trim();
+        refs = (getHdr("References").match(/<[^>]+>/g) || []).map(stripBrackets);
+        inReply = stripBrackets(getHdr("In-Reply-To"));
+        msgHdrId = stripBrackets(getHdr("Message-ID"));
+      }
+    } catch (e) {}
+
+    // Fallback to getFull() headers if getRaw didn't yield a Message-ID
+    if (!msgHdrId) {
+      try {
+        const full = await messenger.messages.getFull(msgId);
+        refs = (full.headers?.["references"]?.[0] || "").split(/\s+/).filter(Boolean);
+        inReply = full.headers?.["in-reply-to"]?.[0] || "";
+        msgHdrId = full.headers?.["message-id"]?.[0] || "";
+      } catch (e) {}
+    }
+
+    const seenIds = new Set();
     const thread = [];
+    const addMsg = (m) => { if (!seenIds.has(m.id)) { seenIds.add(m.id); thread.push(formatMessage(m)); } };
+
+    // Upstream: look up each message in the References chain
+    const ids = new Set([...refs, inReply, msgHdrId].filter(Boolean));
     for (const hdrId of ids) {
       try {
         const r = await messenger.messages.query({ headerMessageId: hdrId });
-        if (r.messages) {
-          for (const m of r.messages) {
-            if (!thread.find((t) => t.id === m.id)) thread.push(formatMessage(m));
-          }
-        }
+        if (r?.messages) r.messages.forEach(addMsg);
       } catch (e) {}
     }
+
+    // Downstream: subject search catches replies not yet in our References
+    if (subject) {
+      const norm = subject.replace(/^((Re|WG|AW|Fwd?|FW|Sv|Vs|Ref):\s*|\[[^\]]*\]\s*)*/gi, "").trim();
+      if (norm) {
+        try {
+          const r = await messenger.messages.query({ subject: norm });
+          if (r?.messages) r.messages.forEach(addMsg);
+        } catch (e) {}
+      }
+    }
+
     thread.sort((a, b) => new Date(a.date) - new Date(b.date));
     return { thread, count: thread.length };
   }
