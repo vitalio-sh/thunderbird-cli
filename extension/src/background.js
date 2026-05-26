@@ -417,7 +417,7 @@ async function handleRequest({ method, path, body }) {
         const headerSection = raw.split(/\r?\n\r?\n/)[0];
         const unfolded = headerSection.replace(/\r?\n[ \t]+/g, " ");
         const getHdr = (name) => { const m = unfolded.match(new RegExp(`^${name}:[ \\t]*(.+)`, "im")); return m ? m[1].trim() : ""; };
-        const stripBrackets = (s) => s.replace(/^<|>$/g, "").trim();
+        const stripBrackets = (s) => s.trim().replace(/^<|>$/g, "").trim();
         refs = (getHdr("References").match(/<[^>]+>/g) || []).map(stripBrackets);
         inReply = stripBrackets(getHdr("In-Reply-To"));
         msgHdrId = stripBrackets(getHdr("Message-ID"));
@@ -605,12 +605,20 @@ async function handleRequest({ method, path, body }) {
   // ─── Recent ─────────────────────────────────────────────────────
 
   if (path === "/recent" && method === "POST") {
-    const { hours = 24, limit = 50 } = body || {};
+    const { hours = 24, limit = 50, accountId } = body || {};
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    // When filtering by account, collect more up-front so filtering doesn't
+    // starve the result — accounts are mixed in the raw query stream.
+    const collectLimit = accountId ? limit * 5 : limit;
     const result = await collectMessages(
-      () => messenger.messages.query({ fromDate: since }), limit
+      () => messenger.messages.query({ fromDate: since }), collectLimit
     );
     result.messages.sort((a, b) => new Date(b.date) - new Date(a.date));
+    if (accountId) {
+      result.messages = result.messages
+        .filter(m => m.folder?.accountId === accountId)
+        .slice(0, limit);
+    }
     result.since = since.toISOString();
     return result;
   }
