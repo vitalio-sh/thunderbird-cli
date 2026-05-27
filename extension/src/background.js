@@ -607,18 +607,11 @@ async function handleRequest({ method, path, body }) {
   if (path === "/recent" && method === "POST") {
     const { hours = 24, limit = 50, accountId } = body || {};
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
-    // When filtering by account, collect more up-front so filtering doesn't
-    // starve the result — accounts are mixed in the raw query stream.
-    const collectLimit = accountId ? limit * 5 : limit;
     const result = await collectMessages(
-      () => messenger.messages.query({ fromDate: since }), collectLimit
+      () => messenger.messages.query({ fromDate: since }), limit,
+      { accountId: accountId || null }
     );
     result.messages.sort((a, b) => new Date(b.date) - new Date(a.date));
-    if (accountId) {
-      result.messages = result.messages
-        .filter(m => m.folder?.accountId === accountId)
-        .slice(0, limit);
-    }
     result.since = since.toISOString();
     return result;
   }
@@ -811,7 +804,7 @@ async function countFolder(folder, stats) {
   }
 }
 
-async function collectMessages(queryFn, limit, { unreadOnly = false, flaggedOnly = false, offset = 0 } = {}) {
+async function collectMessages(queryFn, limit, { unreadOnly = false, flaggedOnly = false, offset = 0, accountId = null } = {}) {
   let page = await queryFn();
   const messages = [];
   let skipped = 0;
@@ -819,6 +812,7 @@ async function collectMessages(queryFn, limit, { unreadOnly = false, flaggedOnly
     for (const msg of page.messages) {
       if (unreadOnly && msg.read) continue;
       if (flaggedOnly && !msg.flagged) continue;
+      if (accountId && msg.folder?.accountId !== accountId) continue;
       if (skipped < offset) { skipped++; continue; }
       messages.push(formatMessage(msg));
       if (messages.length >= limit) break;
