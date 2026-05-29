@@ -18,7 +18,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "ws": "^8.17.0"
+    "ws": "^8.21.0"
   },
   "keywords": [
     "mcp",
