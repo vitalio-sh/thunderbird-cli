@@ -43,7 +43,7 @@
     "url": "https://github.com/vitalio-sh/thunderbird-cli"
   },
   "devDependencies": {
-    "adm-zip": "^0.5.17",
+    "adm-zip": "^0.6.0",
     "ws": "^8.20.0"
   }
 }
