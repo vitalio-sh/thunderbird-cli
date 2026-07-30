@@ -7,10 +7,12 @@
  */
 
 const WS_URL = "ws://127.0.0.1:7701";
-const RECONNECT_DELAY = 3000;
+const RECONNECT_BASE_MS = 3000;
+const RECONNECT_MAX_MS  = 60000;
 
 let ws = null;
 let reconnectTimer = null;
+let reconnectDelay = RECONNECT_BASE_MS; // grows with each failed attempt; reset on success
 
 // ─── WebSocket Connection ───────────────────────────────────────────
 
@@ -27,6 +29,7 @@ function connect() {
 
   ws.onopen = () => {
     console.log("[tb-ai] Connected to bridge");
+    reconnectDelay = RECONNECT_BASE_MS; // reset backoff on successful connection
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -65,16 +68,39 @@ function connect() {
   };
 }
 
+// Exponential backoff with ±1 s jitter.  Sequence when bridge is absent:
+//   3 s → 6 s → 12 s → 24 s → 48 s → 60 s → 60 s → …
+// Resets to 3 s immediately on a successful connection (see ws.onopen above).
 function scheduleReconnect() {
   if (reconnectTimer) return;
+  const jitter = Math.floor(Math.random() * 1000);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
-  }, RECONNECT_DELAY);
+  }, reconnectDelay + jitter);
+  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
 }
 
 // Start connection
 connect();
+
+// ─── Sleep/Wake Awareness ────────────────────────────────────────────
+// On macOS, browser.idle.onStateChanged fires when the system wakes from
+// sleep or the user unlocks the screen (newState → "active").  At that
+// point the old WebSocket is already dead; reset backoff and reconnect
+// immediately rather than waiting out the full exponential delay.
+if (typeof browser !== "undefined" && browser.idle) {
+  browser.idle.onStateChanged.addListener((newState) => {
+    if (newState === "active" && (!ws || ws.readyState !== WebSocket.OPEN)) {
+      reconnectDelay = RECONNECT_BASE_MS;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      connect();
+    }
+  });
+}
 
 // ─── Request Router ─────────────────────────────────────────────────
 
@@ -238,16 +264,21 @@ async function handleRequest({ method, path, body }) {
 
   if (path === "/messages/read-batch" && method === "POST") {
     const { messageIds } = body || {};
-    const results = [];
-    for (const id of messageIds) {
-      try {
-        const msg = await messenger.messages.get(id);
-        const full = await messenger.messages.getFull(id);
-        results.push({ ...formatMessage(msg), parts: extractParts(full) });
-      } catch (e) {
-        results.push({ id, error: e.message });
-      }
-    }
+    // Fetch every message's header and body concurrently; each pair is
+    // also parallelised (get + getFull have no ordering dependency).
+    const results = await Promise.all(
+      (messageIds || []).map(async (id) => {
+        try {
+          const [msg, full] = await Promise.all([
+            messenger.messages.get(id),
+            messenger.messages.getFull(id),
+          ]);
+          return { ...formatMessage(msg), parts: extractParts(full) };
+        } catch (e) {
+          return { id, error: e.message };
+        }
+      })
+    );
     return results;
   }
 
@@ -261,10 +292,10 @@ async function handleRequest({ method, path, body }) {
     if (body.folderId) {
       const folder = await messenger.folders.get(body.folderId, false);
       const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
-      let fetched = 0;
-      for (const msg of result.messages) {
-        try { await messenger.messages.getRaw(msg.id); fetched++; } catch {}
-      }
+      const fetchResults = await concurrentMap(result.messages, async (msg) => {
+        try { await messenger.messages.getRaw(msg.id); return true; } catch { return false; }
+      });
+      const fetched = fetchResults.filter(Boolean).length;
       return { fetched, total: result.messages.length };
     }
     return { error: "Provide messageId or folderId" };
@@ -409,17 +440,28 @@ async function handleRequest({ method, path, body }) {
     const refs = (full.headers?.["references"]?.[0] || "").split(/\s+/).filter(Boolean);
     const inReply = full.headers?.["in-reply-to"]?.[0] || "";
     const msgHdrId = full.headers?.["message-id"]?.[0] || "";
-    const ids = new Set([...refs, inReply, msgHdrId].filter(Boolean));
+    // Deduplicate header-message-ids before querying so we never issue
+    // the same messenger.messages.query() call twice.
+    const ids = [...new Set([...refs, inReply, msgHdrId].filter(Boolean))];
+    // Issue all queries concurrently — they are independent reads.
+    const pageArrays = await Promise.all(
+      ids.map(async (hdrId) => {
+        try {
+          const r = await messenger.messages.query({ headerMessageId: hdrId });
+          return r.messages || [];
+        } catch { return []; }
+      })
+    );
+    // Flatten and deduplicate by message id.
+    const seen = new Set();
     const thread = [];
-    for (const hdrId of ids) {
-      try {
-        const r = await messenger.messages.query({ headerMessageId: hdrId });
-        if (r.messages) {
-          for (const m of r.messages) {
-            if (!thread.find((t) => t.id === m.id)) thread.push(formatMessage(m));
-          }
+    for (const msgs of pageArrays) {
+      for (const m of msgs) {
+        if (!seen.has(m.id)) {
+          seen.add(m.id);
+          thread.push(formatMessage(m));
         }
-      } catch (e) {}
+      }
     }
     thread.sort((a, b) => new Date(a.date) - new Date(b.date));
     return { thread, count: thread.length };
@@ -670,26 +712,26 @@ async function handleRequest({ method, path, body }) {
     const folder = await messenger.folders.get(body.folderId, false);
     const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
     const filtered = filterBulkMessages(result.messages, body);
-    let tagged = 0;
-    for (const msg of filtered) {
+    // Update each message concurrently; bounded to avoid flooding Thunderbird IPC.
+    const tagResults = await concurrentMap(filtered, async (msg) => {
       const tags = [...(msg.tags || [])];
       if (!tags.includes(body.tagKey)) {
         tags.push(body.tagKey);
         await messenger.messages.update(msg.id, { tags });
-        tagged++;
+        return true;
       }
-    }
-    return { success: true, tagged };
+      return false;
+    });
+    return { success: true, tagged: tagResults.filter(Boolean).length };
   }
 
   if (path === "/bulk/fetch" && method === "POST") {
     const folder = await messenger.folders.get(body.folderId, false);
     const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
-    let fetched = 0;
-    for (const msg of result.messages) {
-      try { await messenger.messages.getRaw(msg.id); fetched++; } catch {}
-    }
-    return { success: true, fetched, total: result.messages.length };
+    const fetchResults = await concurrentMap(result.messages, async (msg) => {
+      try { await messenger.messages.getRaw(msg.id); return true; } catch { return false; }
+    });
+    return { success: true, fetched: fetchResults.filter(Boolean).length, total: result.messages.length };
   }
 
   // ─── Not found ─────────────────────────────────────────────────
@@ -805,4 +847,20 @@ function filterBulkMessages(messages, filters) {
 function priorityToValue(priority) {
   const map = { highest: "1", high: "2", normal: "3", low: "4", lowest: "5" };
   return map[priority] || "3";
+}
+
+/**
+ * Run an async mapping function over an array with bounded concurrency.
+ * Items are processed in batches of `concurrency`; each batch is
+ * fully awaited before the next begins, preserving result order.
+ * Default concurrency of 8 balances throughput against Thunderbird IPC load.
+ */
+async function concurrentMap(items, fn, concurrency = 8) {
+  const results = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.all(batch.map(fn));
+    results.push(...batchResults);
+  }
+  return results;
 }

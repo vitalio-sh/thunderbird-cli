@@ -2,9 +2,28 @@
 
 **Project:** `vitalio-sh/thunderbird-cli`  
 **Audit context:** `le-dawg/thunderbird-cli` (fork, execution context only)  
-**Date:** 2026-07-28  
+**Original audit date:** 2026-07-28  
+**Implementation PR date:** 2026-07-30  
 **Auditor:** Copilot Cloud Agent (automated)  
 **Scope:** `tb-bridge` daemon, Thunderbird WebExtension, CLI ↔ bridge ↔ extension request architecture
+
+---
+
+## Implementation Status
+
+The following issues from this audit have been **fixed in the accompanying PR** (`extension/src/background.js` + `extension/manifest.json`):
+
+| ID | Severity | Description | Status |
+|---|---|---|---|
+| C1 | CRITICAL | Fixed 3-second reconnect — no backoff | ✅ **Implemented**: exponential backoff 3 s → 6 s → … → 60 s cap, ±1 s jitter, reset on connect |
+| H1 | HIGH | Serial `get()` + `getFull()` in `read-batch` | ✅ **Implemented**: full `Promise.all` parallelism across all message IDs |
+| H2 | HIGH | Serial `query()` loop in thread reconstruction | ✅ **Implemented**: all header-ID queries run concurrently via `Promise.all` |
+| H3 | HIGH | Serial `update()` per message in `bulk/tag` | ✅ **Implemented**: bounded `concurrentMap(concurrency=8)` |
+| H4 | HIGH | Serial `getRaw()` in `bulk/fetch` and `messages/fetch` | ✅ **Implemented**: bounded `concurrentMap(concurrency=8)` |
+| M3 | MEDIUM | No macOS sleep/wake awareness | ✅ **Implemented**: `browser.idle.onStateChanged` listener; resets backoff and reconnects immediately on wake; `idle` permission added to `manifest.json` |
+| M2 | MEDIUM | Byte-by-byte base64 loop for attachments | ⚠️ **Proposed, not implemented** — see proposal below |
+
+All other issues (M1 folder-cache, L1 pending-map cap, L2 CORS, L3 clientTracking) remain open for future work per the roadmap sections below.
 
 ---
 
@@ -318,20 +337,20 @@ const wss = new WebSocketServer({ host: "127.0.0.1", port: WS_PORT });
 | Guideline | Component | Verdict | Evidence |
 |---|---|---|---|
 | Minimize unnecessary wakeups | Bridge daemon | **Compliant** | No background timers, purely event-driven. Zero wakeups at idle. |
-| Minimize unnecessary wakeups | WebExtension | **Non-compliant** | Fixed 3s reconnect fires continuously when bridge absent. ~20 wakeups/min. `background.js:10,70` |
+| Minimize unnecessary wakeups | WebExtension | **Compliant** *(was Non-compliant — fixed)* | Exponential backoff now caps at 60 s; resets to 3 s on connect. `background.js:10-11,74-82` |
 | Prefer event-driven over polling | Bridge daemon | **Compliant** | HTTP server and WS server use Node.js event callbacks only. `bridge.js:33,81` |
-| Prefer event-driven over polling | WebExtension | **Partially compliant** | Connection detection is event-driven (onclose/onerror); however, the 3s retry period effectively acts as aggressive polling when bridge is absent. `background.js:55-73` |
+| Prefer event-driven over polling | WebExtension | **Compliant** *(was Partially compliant — fixed)* | Connection detection event-driven; backoff prevents polling effect when bridge absent. `background.js:58-82` |
 | Coalesce timers / avoid aggressive intervals | Bridge daemon | **Compliant** | Only per-request setTimeout (on-demand). No periodic timers. |
-| Coalesce timers / avoid aggressive intervals | WebExtension | **Non-compliant** | `RECONNECT_DELAY = 3000` hardcoded, no growth, no cap. No backoff strategy. `background.js:10` |
-| Reduce unnecessary network I/O | All | **Partially compliant** | No redundant requests at idle. Under load: serial request chains create sustained IPC traffic longer than needed. `background.js:239-250,405-426` |
+| Coalesce timers / avoid aggressive intervals | WebExtension | **Compliant** *(was Non-compliant — fixed)* | Exponential backoff with ±1 s jitter; no fixed-interval firing. `background.js:71-82` |
+| Reduce unnecessary network I/O | All | **Partially compliant** *(improved)* | Serial chains eliminated for read-batch, thread, bulk-tag, bulk-fetch. Stats traversal still serial. |
 | Reduce unnecessary disk I/O | All | **Compliant** | No log files. Config read once at startup. No periodic writes. `client.js:28-34` |
 | Keep idle cost low | Bridge daemon | **Compliant** | Near-zero idle cost: 2 open TCP sockets, event loop blocked waiting for I/O. |
-| Keep idle cost low | WebExtension | **Non-compliant** | Idle cost when bridge absent: recurring 3s timer in Thunderbird JS host. `background.js:68-74` |
+| Keep idle cost low | WebExtension | **Compliant** *(was Non-compliant — fixed)* | Idle cost when bridge absent decays to 1 wakeup/60 s. `background.js:74-82` |
 | Scale work with demand | Bridge daemon | **Compliant** | Stateless proxy; all work tied to incoming requests. |
-| Scale work with demand | WebExtension | **Partially compliant** | Work scales with requests but serializes multi-record operations instead of bursting. `background.js:239-251,405-426,669-682` |
+| Scale work with demand | WebExtension | **Compliant** *(was Partially compliant — fixed)* | Multi-record operations now burst concurrently (bounded to 8) then return to idle. |
 | Graceful sleep/wake behavior | Bridge daemon | **Not applicable** | TCP sockets re-bind transparently post-wake; bridge has no long-lived connections to external hosts. |
-| Graceful sleep/wake behavior | WebExtension | **Partially compliant** | WS close event triggered on wake, reconnect starts. But 3s interval unmodified; no jitter to spread wakeup load. `background.js:55-74` |
-| Avoid redundant computation | WebExtension | **Non-compliant** | Byte-by-byte base64 loop for attachments. Folder tree re-traversed on every `/stats`. `background.js:398-400,758-767` |
+| Graceful sleep/wake behavior | WebExtension | **Compliant** *(was Partially compliant — fixed)* | `browser.idle.onStateChanged` resets backoff and reconnects immediately on wake. `background.js:87-103` |
+| Avoid redundant computation | WebExtension | **Partially compliant** *(partially improved)* | Serial fetch loops replaced with concurrent batches. Byte-by-byte base64 (M2) and folder-tree re-traversal (M1) remain open. |
 
 ---
 
@@ -339,42 +358,44 @@ const wss = new WebSocketServer({ host: "127.0.0.1", port: WS_PORT });
 
 ### CRITICAL
 
-| # | Issue | Energy Impact | Code Location |
-|---|---|---|---|
-| C1 | Fixed 3s reconnect with no backoff or cap in extension | ~20 Thunderbird JS-host wakeups/min indefinitely when bridge not running | `background.js:10,68-74` |
+| # | Issue | Energy Impact | Code Location | Status |
+|---|---|---|---|---|
+| C1 | Fixed 3s reconnect with no backoff or cap in extension | ~20 Thunderbird JS-host wakeups/min indefinitely when bridge not running | `background.js:10,68-74` | ✅ Fixed |
 
 ### HIGH
 
-| # | Issue | Energy Impact | Code Location |
-|---|---|---|---|
-| H1 | Serial `get()` + `getFull()` in `/messages/read-batch` | 2N sequential IPC round-trips; CPU + Thunderbird IPC held open N× longer than necessary | `background.js:239-251` |
-| H2 | Serial `query()` loop in thread reconstruction | M sequential messenger queries; amplified by deep threads | `background.js:405-426` |
-| H3 | Serial `update()` per message in `/bulk/tag` | N sequential messenger IPC calls; Thunderbird I/O stays active for duration of bulk | `background.js:669-682` |
-| H4 | Serial `getRaw()` per message in `bulk/fetch` and `messages/fetch` | N sequential network-fetches; prevents parallel IMAP scheduling inside Thunderbird | `background.js:265-267,685-692` |
+| # | Issue | Energy Impact | Code Location | Status |
+|---|---|---|---|---|
+| H1 | Serial `get()` + `getFull()` in `/messages/read-batch` | 2N sequential IPC round-trips; CPU + Thunderbird IPC held open N× longer than necessary | `background.js:239-251` | ✅ Fixed |
+| H2 | Serial `query()` loop in thread reconstruction | M sequential messenger queries; amplified by deep threads | `background.js:405-426` | ✅ Fixed |
+| H3 | Serial `update()` per message in `/bulk/tag` | N sequential messenger IPC calls; Thunderbird I/O stays active for duration of bulk | `background.js:669-682` | ✅ Fixed |
+| H4 | Serial `getRaw()` per message in `bulk/fetch` and `messages/fetch` | N sequential network-fetches; prevents parallel IMAP scheduling inside Thunderbird | `background.js:265-267,685-692` | ✅ Fixed |
 
 ### MEDIUM
 
-| # | Issue | Energy Impact | Code Location |
-|---|---|---|---|
-| M1 | Recursive serial `getFolderInfo()` in `/stats` and `flattenFolders` | O(folders) IPC calls per invocation; no cache; re-traverses entire tree every call | `background.js:525-565,740-756,758-767` |
-| M2 | Byte-by-byte `String.fromCharCode` in attachment download | High CPU + GC pressure for attachments > 1 MB | `background.js:395-401` |
-| M3 | No sleep/wake awareness | Minor: reconnect delay persists at 3s after wake; no jitter | `background.js:68-74`, `bridge.js` |
+| # | Issue | Energy Impact | Code Location | Status |
+|---|---|---|---|---|
+| M1 | Recursive serial `getFolderInfo()` in `/stats` and `flattenFolders` | O(folders) IPC calls per invocation; no cache; re-traverses entire tree every call | `background.js:525-565,740-756,758-767` | Open |
+| M2 | Byte-by-byte `String.fromCharCode` in attachment download | High CPU + GC pressure for attachments > 1 MB | `background.js:395-401` | ⚠️ Proposed |
+| M3 | No sleep/wake awareness | Minor: reconnect delay persists at 3s after wake; no jitter | `background.js:68-74`, `bridge.js` | ✅ Fixed |
 
 ### LOW
 
-| # | Issue | Energy Impact | Code Location |
-|---|---|---|---|
-| L1 | No upper bound on `pending` Map | Memory growth and timer count unbounded under adversarial load | `bridge.js:27,64-77` |
-| L2 | CORS wildcard | Security concern only; no energy impact | `bridge.js:83-86` |
-| L3 | ws clientTracking default | Negligible for single-client design | `bridge.js:31` |
+| # | Issue | Energy Impact | Code Location | Status |
+|---|---|---|---|---|
+| L1 | No upper bound on `pending` Map | Memory growth and timer count unbounded under adversarial load | `bridge.js:27,64-77` | Open |
+| L2 | CORS wildcard | Security concern only; no energy impact | `bridge.js:83-86` | Open |
+| L3 | ws clientTracking default | Negligible for single-client design | `bridge.js:31` | Open |
 
 ---
 
 ## Prioritized Remediation Roadmap
 
+> **Implementation note (2026-07-30):** All Quick Wins and MT-1/MT-2 items that were rated C1, H1-H4, and M3 have been **implemented** in the accompanying PR. Items marked ⚠️ **Proposed** (M2) and **Open** (M1, L1-L3) remain for future work.
+
 ### Quick Wins (Low Effort / High Impact)
 
-#### QW-1: Add Exponential Backoff to Extension Reconnect
+#### QW-1: Add Exponential Backoff to Extension Reconnect ✅ Implemented
 **Effort:** ~20 lines | **Impact:** Eliminates C1 entirely
 
 Replace the fixed `RECONNECT_DELAY` with a capped exponential backoff:
@@ -408,7 +429,7 @@ const jitter = Math.random() * 1000;
 reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS) + jitter;
 ```
 
-#### QW-2: Parallelize `read-batch` with `Promise.all`
+#### QW-2: Parallelize `read-batch` with `Promise.all` ✅ Implemented
 **Effort:** ~10 lines | **Impact:** Eliminates H1; reduces read-batch latency by N×
 
 ```js
@@ -433,7 +454,7 @@ if (path === "/messages/read-batch" && method === "POST") {
 
 Note: `messenger.*` API is async-safe; parallel calls are safe for read operations.
 
-#### QW-3: Parallelize Thread Reconstruction Queries
+#### QW-3: Parallelize Thread Reconstruction Queries ✅ Implemented
 **Effort:** ~10 lines | **Impact:** Eliminates H2
 
 ```js
@@ -456,8 +477,12 @@ thread.sort((a, b) => new Date(a.date) - new Date(b.date));
 return { thread, count: thread.length };
 ```
 
-#### QW-4: Fix Attachment Base64 Encoding
+#### QW-4: Fix Attachment Base64 Encoding ⚠️ Proposed — Not Implemented
 **Effort:** 5 lines | **Impact:** Eliminates M2; large attachments become ~10× faster
+
+**Why not implemented in this PR:** The fix is straightforward but touches the WebExtension's attachment download path, which requires end-to-end testing with real multi-megabyte attachments to verify correctness of the chunked encoding across all content types. The existing test suite mocks the bridge at the HTTP level and cannot exercise the inner `arrayBuffer()` → `btoa()` path in the WebExtension context. The proposal is documented here so it can be picked up in a dedicated, testable PR.
+
+**Proposed change** (`extension/src/background.js`, attachment handler at `/messages/:id/attachment`):
 
 ```js
 // Replace the byte-by-byte loop:
@@ -479,7 +504,7 @@ This avoids per-character string growth; chunked spread is V8-optimized and avoi
 
 ### Medium-Term Improvements
 
-#### MT-1: Parallelize `bulk/tag` and `bulk/fetch` with Bounded Concurrency
+#### MT-1: Parallelize `bulk/tag` and `bulk/fetch` with Bounded Concurrency ✅ Implemented
 **Effort:** ~30 lines | **Impact:** Reduces H3, H4
 
 Sequential per-message updates are safe to parallelize. A concurrency limit (e.g., 8) prevents overwhelming the Thunderbird IPC channel:
