@@ -7,15 +7,26 @@
  */
 
 const WS_URL = "ws://127.0.0.1:7701";
-const RECONNECT_DELAY = 3000;
+const RECONNECT_BASE_MS = 3000;
+const RECONNECT_MAX_MS  = 60000;
+const RECONNECT_JITTER_MS = 0;
+const SHARED_IPC_CONCURRENCY = 8;
+const RESUME_HEARTBEAT_MS = 15000;
+const RESUME_GAP_MS = 45000;
+const BASE64_CHUNK_SIZE = 0x8000;
 
 let ws = null;
 let reconnectTimer = null;
+let reconnectDelay = RECONNECT_BASE_MS; // grows with each failed attempt; reset on success
+let reconnectFailures = 0; // increments on each scheduled reconnect attempt
+let lastHeartbeatAt = Date.now();
+let ipcInFlight = 0;
+const ipcQueue = [];
 
 // ─── WebSocket Connection ───────────────────────────────────────────
 
 function connect() {
-  if (ws && ws.readyState === WebSocket.OPEN) return;
+  if (isSocketOpenOrConnecting(ws)) return;
 
   try {
     ws = new WebSocket(WS_URL);
@@ -27,6 +38,8 @@ function connect() {
 
   ws.onopen = () => {
     console.log("[tb-ai] Connected to bridge");
+    reconnectFailures = 0;
+    reconnectDelay = RECONNECT_BASE_MS; // reset backoff on successful connection
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -65,16 +78,62 @@ function connect() {
   };
 }
 
+// Exponential backoff. Sequence when bridge is absent:
+//   3 s → 6 s → 12 s → 24 s → 48 s → 60 s → 60 s → …
+// Optional jitter is clamped and never exceeds RECONNECT_MAX_MS.
+// Resets to 3 s immediately on a successful connection (see ws.onopen above).
 function scheduleReconnect() {
   if (reconnectTimer) return;
+  reconnectDelay = Math.min(reconnectDelay, RECONNECT_MAX_MS);
+  const jitter = getReconnectJitterMs();
+  const scheduledDelay = Math.min(reconnectDelay + jitter, RECONNECT_MAX_MS);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
-  }, RECONNECT_DELAY);
+  }, scheduledDelay);
+  reconnectFailures += 1;
+  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+}
+
+function getReconnectJitterMs() {
+  if (RECONNECT_JITTER_MS <= 0) return 0;
+  return Math.floor(Math.random() * (RECONNECT_JITTER_MS + 1));
+}
+
+function isSocketOpenOrConnecting(socket) {
+  return socket && (
+    socket.readyState === WebSocket.OPEN ||
+    socket.readyState === WebSocket.CONNECTING
+  );
+}
+
+function reconnectNow() {
+  reconnectFailures = 0;
+  reconnectDelay = RECONNECT_BASE_MS;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (!isSocketOpenOrConnecting(ws)) connect();
 }
 
 // Start connection
 connect();
+
+// ─── Resume & User-Idle Awareness ─────────────────────────────────────
+// Sleep/wake: detect long timer gaps (macOS suspend/resume) and reconnect.
+setInterval(() => {
+  const now = Date.now();
+  if (now - lastHeartbeatAt > RESUME_GAP_MS) reconnectNow();
+  lastHeartbeatAt = now;
+}, RESUME_HEARTBEAT_MS);
+
+// User-idle transitions: unlock/active also triggers immediate reconnect.
+if (typeof browser !== "undefined" && browser.idle) {
+  browser.idle.onStateChanged.addListener((newState) => {
+    if (newState === "active") reconnectNow();
+  });
+}
 
 // ─── Request Router ─────────────────────────────────────────────────
 
@@ -238,16 +297,19 @@ async function handleRequest({ method, path, body }) {
 
   if (path === "/messages/read-batch" && method === "POST") {
     const { messageIds } = body || {};
-    const results = [];
-    for (const id of messageIds) {
-      try {
-        const msg = await messenger.messages.get(id);
-        const full = await messenger.messages.getFull(id);
-        results.push({ ...formatMessage(msg), parts: extractParts(full) });
-      } catch (e) {
-        results.push({ id, error: e.message });
-      }
-    }
+    // Fetch every message's header and body concurrently; each pair is
+    // also parallelised (get + getFull have no ordering dependency).
+    const results = await concurrentMap(messageIds || [], async (id) => {
+        try {
+          const [msg, full] = await Promise.all([
+            messenger.messages.get(id),
+            messenger.messages.getFull(id),
+          ]);
+          return { ...formatMessage(msg), parts: extractParts(full) };
+        } catch (e) {
+          return { id, error: e.message };
+        }
+      });
     return results;
   }
 
@@ -261,10 +323,10 @@ async function handleRequest({ method, path, body }) {
     if (body.folderId) {
       const folder = await messenger.folders.get(body.folderId, false);
       const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
-      let fetched = 0;
-      for (const msg of result.messages) {
-        try { await messenger.messages.getRaw(msg.id); fetched++; } catch {}
-      }
+      const fetchResults = await concurrentMap(result.messages, async (msg) => {
+        try { await messenger.messages.getRaw(msg.id); return true; } catch { return false; }
+      });
+      const fetched = fetchResults.filter(Boolean).length;
       return { fetched, total: result.messages.length };
     }
     return { error: "Provide messageId or folderId" };
@@ -395,9 +457,7 @@ async function handleRequest({ method, path, body }) {
     const file = await messenger.messages.getAttachmentFile(msgId, partName);
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    const base64 = btoa(binary);
+    const base64 = bytesToBase64(bytes);
     return { name: file.name, size: file.size, contentType: file.type, data: base64 };
   }
 
@@ -409,17 +469,26 @@ async function handleRequest({ method, path, body }) {
     const refs = (full.headers?.["references"]?.[0] || "").split(/\s+/).filter(Boolean);
     const inReply = full.headers?.["in-reply-to"]?.[0] || "";
     const msgHdrId = full.headers?.["message-id"]?.[0] || "";
-    const ids = new Set([...refs, inReply, msgHdrId].filter(Boolean));
+    // Deduplicate header-message-ids before querying so we never issue
+    // the same messenger.messages.query() call twice.
+    const ids = [...new Set([...refs, inReply, msgHdrId].filter(Boolean))];
+    // Issue queries concurrently with shared IPC throttling.
+    const pageArrays = await concurrentMap(ids, async (hdrId) => {
+        try {
+          const r = await messenger.messages.query({ headerMessageId: hdrId });
+          return r.messages || [];
+        } catch { return []; }
+      });
+    // Flatten and deduplicate by message id.
+    const seen = new Set();
     const thread = [];
-    for (const hdrId of ids) {
-      try {
-        const r = await messenger.messages.query({ headerMessageId: hdrId });
-        if (r.messages) {
-          for (const m of r.messages) {
-            if (!thread.find((t) => t.id === m.id)) thread.push(formatMessage(m));
-          }
+    for (const msgs of pageArrays) {
+      for (const m of msgs) {
+        if (!seen.has(m.id)) {
+          seen.add(m.id);
+          thread.push(formatMessage(m));
         }
-      } catch (e) {}
+      }
     }
     thread.sort((a, b) => new Date(a.date) - new Date(b.date));
     return { thread, count: thread.length };
@@ -670,26 +739,26 @@ async function handleRequest({ method, path, body }) {
     const folder = await messenger.folders.get(body.folderId, false);
     const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
     const filtered = filterBulkMessages(result.messages, body);
-    let tagged = 0;
-    for (const msg of filtered) {
+    // Update each message concurrently; bounded to avoid flooding Thunderbird IPC.
+    const tagResults = await concurrentMap(filtered, async (msg) => {
       const tags = [...(msg.tags || [])];
       if (!tags.includes(body.tagKey)) {
         tags.push(body.tagKey);
         await messenger.messages.update(msg.id, { tags });
-        tagged++;
+        return true;
       }
-    }
-    return { success: true, tagged };
+      return false;
+    });
+    return { success: true, tagged: tagResults.filter(Boolean).length };
   }
 
   if (path === "/bulk/fetch" && method === "POST") {
     const folder = await messenger.folders.get(body.folderId, false);
     const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
-    let fetched = 0;
-    for (const msg of result.messages) {
-      try { await messenger.messages.getRaw(msg.id); fetched++; } catch {}
-    }
-    return { success: true, fetched, total: result.messages.length };
+    const fetchResults = await concurrentMap(result.messages, async (msg) => {
+      try { await messenger.messages.getRaw(msg.id); return true; } catch { return false; }
+    });
+    return { success: true, fetched: fetchResults.filter(Boolean).length, total: result.messages.length };
   }
 
   // ─── Not found ─────────────────────────────────────────────────
@@ -805,4 +874,57 @@ function filterBulkMessages(messages, filters) {
 function priorityToValue(priority) {
   const map = { highest: "1", high: "2", normal: "3", low: "4", lowest: "5" };
   return map[priority] || "3";
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += BASE64_CHUNK_SIZE) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + BASE64_CHUNK_SIZE));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Run an async mapping function over an array with bounded concurrency.
+ * Uses a shared queue so overlapping requests never exceed Thunderbird IPC
+ * concurrency limits globally, while preserving result order.
+ */
+function runWithSharedIpcLimit(fn) {
+  return new Promise((resolve, reject) => {
+    ipcQueue.push({ fn, resolve, reject });
+    drainIpcQueue();
+  });
+}
+
+function drainIpcQueue() {
+  while (ipcInFlight < SHARED_IPC_CONCURRENCY && ipcQueue.length > 0) {
+    const { fn, resolve, reject } = ipcQueue.shift();
+    ipcInFlight += 1;
+    Promise.resolve()
+      .then(fn)
+      .then(resolve, reject)
+      .finally(() => {
+        ipcInFlight -= 1;
+        drainIpcQueue();
+      });
+  }
+}
+
+async function concurrentMap(items, fn, concurrency = SHARED_IPC_CONCURRENCY) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex++;
+        results[index] = await runWithSharedIpcLimit(() => fn(items[index], index));
+      }
+    }
+  );
+  await Promise.all(workers);
+  if (!workers.length) {
+    return [];
+  }
+  return results;
 }
