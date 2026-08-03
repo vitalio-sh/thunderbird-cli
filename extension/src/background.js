@@ -9,15 +9,21 @@
 const WS_URL = "ws://127.0.0.1:7701";
 const RECONNECT_BASE_MS = 3000;
 const RECONNECT_MAX_MS  = 60000;
+const SHARED_IPC_CONCURRENCY = 8;
+const RESUME_HEARTBEAT_MS = 15000;
+const RESUME_GAP_MS = 45000;
 
 let ws = null;
 let reconnectTimer = null;
 let reconnectDelay = RECONNECT_BASE_MS; // grows with each failed attempt; reset on success
+let lastHeartbeatAt = Date.now();
+let ipcInFlight = 0;
+const ipcQueue = [];
 
 // ─── WebSocket Connection ───────────────────────────────────────────
 
 function connect() {
-  if (ws && ws.readyState === WebSocket.OPEN) return;
+  if (isSocketOpenOrConnecting(ws)) return;
 
   try {
     ws = new WebSocket(WS_URL);
@@ -81,24 +87,37 @@ function scheduleReconnect() {
   reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
 }
 
+function isSocketOpenOrConnecting(socket) {
+  return socket && (
+    socket.readyState === WebSocket.OPEN ||
+    socket.readyState === WebSocket.CONNECTING
+  );
+}
+
+function reconnectNow() {
+  reconnectDelay = RECONNECT_BASE_MS;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (!isSocketOpenOrConnecting(ws)) connect();
+}
+
 // Start connection
 connect();
 
-// ─── Sleep/Wake Awareness ────────────────────────────────────────────
-// On macOS, browser.idle.onStateChanged fires when the system wakes from
-// sleep or the user unlocks the screen (newState → "active").  At that
-// point the old WebSocket is already dead; reset backoff and reconnect
-// immediately rather than waiting out the full exponential delay.
+// ─── Resume & User-Idle Awareness ─────────────────────────────────────
+// Sleep/wake: detect long timer gaps (macOS suspend/resume) and reconnect.
+setInterval(() => {
+  const now = Date.now();
+  if (now - lastHeartbeatAt > RESUME_GAP_MS) reconnectNow();
+  lastHeartbeatAt = now;
+}, RESUME_HEARTBEAT_MS);
+
+// User-idle transitions: unlock/active also triggers immediate reconnect.
 if (typeof browser !== "undefined" && browser.idle) {
   browser.idle.onStateChanged.addListener((newState) => {
-    if (newState === "active" && (!ws || ws.readyState !== WebSocket.OPEN)) {
-      reconnectDelay = RECONNECT_BASE_MS;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-      connect();
-    }
+    if (newState === "active") reconnectNow();
   });
 }
 
@@ -266,8 +285,7 @@ async function handleRequest({ method, path, body }) {
     const { messageIds } = body || {};
     // Fetch every message's header and body concurrently; each pair is
     // also parallelised (get + getFull have no ordering dependency).
-    const results = await Promise.all(
-      (messageIds || []).map(async (id) => {
+    const results = await concurrentMap(messageIds || [], async (id) => {
         try {
           const [msg, full] = await Promise.all([
             messenger.messages.get(id),
@@ -277,8 +295,7 @@ async function handleRequest({ method, path, body }) {
         } catch (e) {
           return { id, error: e.message };
         }
-      })
-    );
+      });
     return results;
   }
 
@@ -443,15 +460,13 @@ async function handleRequest({ method, path, body }) {
     // Deduplicate header-message-ids before querying so we never issue
     // the same messenger.messages.query() call twice.
     const ids = [...new Set([...refs, inReply, msgHdrId].filter(Boolean))];
-    // Issue all queries concurrently — they are independent reads.
-    const pageArrays = await Promise.all(
-      ids.map(async (hdrId) => {
+    // Issue queries concurrently with shared IPC throttling.
+    const pageArrays = await concurrentMap(ids, async (hdrId) => {
         try {
           const r = await messenger.messages.query({ headerMessageId: hdrId });
           return r.messages || [];
         } catch { return []; }
-      })
-    );
+      });
     // Flatten and deduplicate by message id.
     const seen = new Set();
     const thread = [];
@@ -851,16 +866,45 @@ function priorityToValue(priority) {
 
 /**
  * Run an async mapping function over an array with bounded concurrency.
- * Items are processed in batches of `concurrency`; each batch is
- * fully awaited before the next begins, preserving result order.
- * Default concurrency of 8 balances throughput against Thunderbird IPC load.
+ * Uses a shared queue so overlapping requests never exceed Thunderbird IPC
+ * concurrency limits globally, while preserving result order.
  */
-async function concurrentMap(items, fn, concurrency = 8) {
-  const results = [];
-  for (let i = 0; i < items.length; i += concurrency) {
-    const batch = items.slice(i, i + concurrency);
-    const batchResults = await Promise.all(batch.map(fn));
-    results.push(...batchResults);
+function runWithSharedIpcLimit(fn) {
+  return new Promise((resolve, reject) => {
+    ipcQueue.push({ fn, resolve, reject });
+    drainIpcQueue();
+  });
+}
+
+function drainIpcQueue() {
+  while (ipcInFlight < SHARED_IPC_CONCURRENCY && ipcQueue.length > 0) {
+    const { fn, resolve, reject } = ipcQueue.shift();
+    ipcInFlight += 1;
+    Promise.resolve()
+      .then(fn)
+      .then(resolve, reject)
+      .finally(() => {
+        ipcInFlight -= 1;
+        drainIpcQueue();
+      });
+  }
+}
+
+async function concurrentMap(items, fn, concurrency = SHARED_IPC_CONCURRENCY) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex++;
+        results[index] = await runWithSharedIpcLimit(() => fn(items[index], index));
+      }
+    }
+  );
+  await Promise.all(workers);
+  if (!workers.length) {
+    return [];
   }
   return results;
 }
