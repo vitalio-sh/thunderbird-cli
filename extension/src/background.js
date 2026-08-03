@@ -9,13 +9,16 @@
 const WS_URL = "ws://127.0.0.1:7701";
 const RECONNECT_BASE_MS = 3000;
 const RECONNECT_MAX_MS  = 60000;
+const RECONNECT_JITTER_MS = 0;
 const SHARED_IPC_CONCURRENCY = 8;
 const RESUME_HEARTBEAT_MS = 15000;
 const RESUME_GAP_MS = 45000;
+const BASE64_CHUNK_SIZE = 0x8000;
 
 let ws = null;
 let reconnectTimer = null;
 let reconnectDelay = RECONNECT_BASE_MS; // grows with each failed attempt; reset on success
+let reconnectFailures = 0; // increments on each scheduled reconnect attempt
 let lastHeartbeatAt = Date.now();
 let ipcInFlight = 0;
 const ipcQueue = [];
@@ -35,6 +38,7 @@ function connect() {
 
   ws.onopen = () => {
     console.log("[tb-ai] Connected to bridge");
+    reconnectFailures = 0;
     reconnectDelay = RECONNECT_BASE_MS; // reset backoff on successful connection
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -74,17 +78,26 @@ function connect() {
   };
 }
 
-// Exponential backoff with ±1 s jitter.  Sequence when bridge is absent:
+// Exponential backoff. Sequence when bridge is absent:
 //   3 s → 6 s → 12 s → 24 s → 48 s → 60 s → 60 s → …
+// Optional jitter is clamped and never exceeds RECONNECT_MAX_MS.
 // Resets to 3 s immediately on a successful connection (see ws.onopen above).
 function scheduleReconnect() {
   if (reconnectTimer) return;
-  const jitter = Math.floor(Math.random() * 1000);
+  reconnectDelay = Math.min(reconnectDelay, RECONNECT_MAX_MS);
+  const jitter = getReconnectJitterMs();
+  const scheduledDelay = Math.min(reconnectDelay + jitter, RECONNECT_MAX_MS);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
-  }, reconnectDelay + jitter);
+  }, scheduledDelay);
+  reconnectFailures += 1;
   reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+}
+
+function getReconnectJitterMs() {
+  if (RECONNECT_JITTER_MS <= 0) return 0;
+  return Math.floor(Math.random() * (RECONNECT_JITTER_MS + 1));
 }
 
 function isSocketOpenOrConnecting(socket) {
@@ -95,6 +108,7 @@ function isSocketOpenOrConnecting(socket) {
 }
 
 function reconnectNow() {
+  reconnectFailures = 0;
   reconnectDelay = RECONNECT_BASE_MS;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
@@ -443,9 +457,7 @@ async function handleRequest({ method, path, body }) {
     const file = await messenger.messages.getAttachmentFile(msgId, partName);
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    const base64 = btoa(binary);
+    const base64 = bytesToBase64(bytes);
     return { name: file.name, size: file.size, contentType: file.type, data: base64 };
   }
 
@@ -862,6 +874,14 @@ function filterBulkMessages(messages, filters) {
 function priorityToValue(priority) {
   const map = { highest: "1", high: "2", normal: "3", low: "4", lowest: "5" };
   return map[priority] || "3";
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += BASE64_CHUNK_SIZE) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + BASE64_CHUNK_SIZE));
+  }
+  return btoa(binary);
 }
 
 /**

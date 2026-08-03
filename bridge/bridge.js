@@ -22,6 +22,13 @@ import { randomUUID } from "crypto";
 const HTTP_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--port") || "7700");
 const WS_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--ws-port") || "7701");
 const DEFAULT_TIMEOUT = parseInt(process.env.TB_BRIDGE_TIMEOUT || "120000");
+const HEARTBEAT_INTERVAL_MS = parseInt(process.env.TB_BRIDGE_WS_HEARTBEAT_MS || "30000");
+const CORS_ALLOWED_ORIGINS = new Set(
+  (process.env.TB_BRIDGE_CORS_ORIGINS || `http://127.0.0.1:${HTTP_PORT},http://localhost:${HTTP_PORT}`)
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 
 let extensionSocket = null;
 const pending = new Map(); // id → { resolve, reject, timer }
@@ -33,6 +40,10 @@ const wss = new WebSocketServer({ host: "127.0.0.1", port: WS_PORT });
 wss.on("connection", (ws) => {
   console.log("[bridge] Extension connected");
   extensionSocket = ws;
+  ws.isAlive = true;
+  ws.on("pong", () => {
+    ws.isAlive = true;
+  });
 
   ws.on("message", (data) => {
     try {
@@ -58,6 +69,21 @@ wss.on("connection", (ws) => {
   });
 });
 
+const heartbeatInterval = setInterval(() => {
+  for (const client of wss.clients) {
+    if (client.isAlive === false) {
+      client.terminate();
+      continue;
+    }
+    client.isAlive = false;
+    if (client.readyState === 1) client.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+
+wss.on("close", () => {
+  clearInterval(heartbeatInterval);
+});
+
 // ─── Forward request to extension ───────────────────────────────────
 
 function forwardToExtension(method, path, body, timeoutMs = DEFAULT_TIMEOUT) {
@@ -79,14 +105,23 @@ function forwardToExtension(method, path, body, timeoutMs = DEFAULT_TIMEOUT) {
 // ─── HTTP Server (for CLI) ──────────────────────────────────────────
 
 const httpServer = createServer(async (req, res) => {
-  // CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-TB-Timeout");
   res.setHeader("Content-Type", "application/json");
+  const allowedOrigin = getAllowedCorsOrigin(req.headers.origin);
+  if (allowedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-TB-Timeout");
+    res.setHeader("Access-Control-Max-Age", "600");
+    res.setHeader("Vary", "Origin");
+  }
 
   if (req.method === "OPTIONS") {
-    res.writeHead(200);
+    if (req.headers.origin && !allowedOrigin) {
+      res.writeHead(403);
+      res.end(JSON.stringify({ error: "CORS origin not allowed" }));
+      return;
+    }
+    res.writeHead(204);
     res.end();
     return;
   }
@@ -139,6 +174,17 @@ const httpServer = createServer(async (req, res) => {
     res.end(JSON.stringify({ error: err.message || "Unknown error" }));
   }
 });
+
+function getAllowedCorsOrigin(originHeader) {
+  if (!originHeader) return null;
+  let origin;
+  try {
+    origin = new URL(originHeader).origin;
+  } catch {
+    return null;
+  }
+  return CORS_ALLOWED_ORIGINS.has(origin) ? origin : null;
+}
 
 httpServer.listen(HTTP_PORT, "127.0.0.1", () => {
   console.log(`[bridge] HTTP server on http://127.0.0.1:${HTTP_PORT}`);
