@@ -9,19 +9,22 @@
 const WS_URL = "ws://127.0.0.1:7701";
 const RECONNECT_BASE_MS = 3000;
 const RECONNECT_MAX_MS  = 60000;
-const RECONNECT_JITTER_MS = 0;
+const RECONNECT_JITTER_MS = 1000;
 const SHARED_IPC_CONCURRENCY = 8;
 const RESUME_HEARTBEAT_MS = 15000;
 const RESUME_GAP_MS = 45000;
+const FOLDER_INFO_CACHE_TTL_MS = 30000;
 const BASE64_CHUNK_SIZE = 0x8000;
 
 let ws = null;
 let reconnectTimer = null;
+let resumeHeartbeatTimer = null;
 let reconnectDelay = RECONNECT_BASE_MS; // grows with each failed attempt; reset on success
 let reconnectFailures = 0; // increments on each scheduled reconnect attempt
 let lastHeartbeatAt = Date.now();
 let ipcInFlight = 0;
 const ipcQueue = [];
+const folderInfoCache = new Map(); // folderId -> { info, expiresAt }
 
 // ─── WebSocket Connection ───────────────────────────────────────────
 
@@ -40,6 +43,8 @@ function connect() {
     console.log("[tb-ai] Connected to bridge");
     reconnectFailures = 0;
     reconnectDelay = RECONNECT_BASE_MS; // reset backoff on successful connection
+    lastHeartbeatAt = Date.now();
+    stopResumeHeartbeatMonitor();
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -47,6 +52,7 @@ function connect() {
   };
 
   ws.onmessage = async (event) => {
+    lastHeartbeatAt = Date.now();
     let request;
     try {
       request = JSON.parse(event.data);
@@ -84,6 +90,7 @@ function connect() {
 // Resets to 3 s immediately on a successful connection (see ws.onopen above).
 function scheduleReconnect() {
   if (reconnectTimer) return;
+  startResumeHeartbeatMonitor();
   reconnectDelay = Math.min(reconnectDelay, RECONNECT_MAX_MS);
   const jitter = getReconnectJitterMs();
   const scheduledDelay = Math.min(reconnectDelay + jitter, RECONNECT_MAX_MS);
@@ -121,12 +128,24 @@ function reconnectNow() {
 connect();
 
 // ─── Resume & User-Idle Awareness ─────────────────────────────────────
-// Sleep/wake: detect long timer gaps (macOS suspend/resume) and reconnect.
-setInterval(() => {
-  const now = Date.now();
-  if (now - lastHeartbeatAt > RESUME_GAP_MS) reconnectNow();
-  lastHeartbeatAt = now;
-}, RESUME_HEARTBEAT_MS);
+// Keep this monitor active only while disconnected. When connected, we rely on
+// onmessage + browser.idle.onStateChanged to detect resume without a permanent
+// low-frequency wakeup that reintroduces the C1-adjacent timer cost.
+function startResumeHeartbeatMonitor() {
+  if (resumeHeartbeatTimer) return;
+  lastHeartbeatAt = Date.now();
+  resumeHeartbeatTimer = setInterval(() => {
+    const now = Date.now();
+    if (now - lastHeartbeatAt > RESUME_GAP_MS) reconnectNow();
+    lastHeartbeatAt = now;
+  }, RESUME_HEARTBEAT_MS);
+}
+
+function stopResumeHeartbeatMonitor() {
+  if (!resumeHeartbeatTimer) return;
+  clearInterval(resumeHeartbeatTimer);
+  resumeHeartbeatTimer = null;
+}
 
 // User-idle transitions: unlock/active also triggers immediate reconnect.
 if (typeof browser !== "undefined" && browser.idle) {
@@ -807,8 +826,7 @@ function extractParts(part, result = { text: "", html: "", attachments: [] }) {
 }
 
 async function flattenFolders(folder, depth = 0) {
-  let info = {};
-  try { info = await messenger.folders.getFolderInfo(folder); } catch {}
+  const info = await getCachedFolderInfo(folder);
   const result = [{
     id: folder.id, name: folder.name, path: folder.path,
     type: folder.type,
@@ -826,12 +844,27 @@ async function flattenFolders(folder, depth = 0) {
 
 async function countFolder(folder, stats) {
   stats.folders++;
-  let info = {};
-  try { info = await messenger.folders.getFolderInfo(folder); } catch {}
+  const info = await getCachedFolderInfo(folder);
   stats.unreadTotal += info.unreadMessageCount || 0;
   stats.messageTotal += info.totalMessageCount || 0;
   if (folder.subFolders) {
     for (const sub of folder.subFolders) await countFolder(sub, stats);
+  }
+}
+
+async function getCachedFolderInfo(folder) {
+  const now = Date.now();
+  const cached = folderInfoCache.get(folder.id);
+  if (cached && cached.expiresAt > now) return cached.info;
+  try {
+    const info = await messenger.folders.getFolderInfo(folder);
+    folderInfoCache.set(folder.id, {
+      info,
+      expiresAt: now + FOLDER_INFO_CACHE_TTL_MS,
+    });
+    return info;
+  } catch {
+    return {};
   }
 }
 
