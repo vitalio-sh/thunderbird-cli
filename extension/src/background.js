@@ -14,6 +14,7 @@ const SHARED_IPC_CONCURRENCY = 8;
 const RESUME_HEARTBEAT_MS = 15000;
 const RESUME_GAP_MS = 45000;
 const FOLDER_INFO_CACHE_TTL_MS = 30000;
+const FOLDER_INFO_CACHE_MAX_SIZE = 500;
 const BASE64_CHUNK_SIZE = 0x8000;
 
 let ws = null;
@@ -856,12 +857,21 @@ async function getCachedFolderInfo(folder) {
   const now = Date.now();
   const cached = folderInfoCache.get(folder.id);
   if (cached && cached.expiresAt > now) return cached.info;
+  // Delete expired entry before refetching
+  if (cached) folderInfoCache.delete(folder.id);
   try {
     const info = await messenger.folders.getFolderInfo(folder);
+    // Set expiresAt using completion time for full TTL
+    const completionTime = Date.now();
     folderInfoCache.set(folder.id, {
       info,
-      expiresAt: now + FOLDER_INFO_CACHE_TTL_MS,
+      expiresAt: completionTime + FOLDER_INFO_CACHE_TTL_MS,
     });
+    // Evict oldest entry if cache exceeds max size
+    if (folderInfoCache.size > FOLDER_INFO_CACHE_MAX_SIZE) {
+      const firstKey = folderInfoCache.keys().next().value;
+      if (firstKey !== undefined) folderInfoCache.delete(firstKey);
+    }
     return info;
   } catch {
     return {};
