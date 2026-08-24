@@ -322,6 +322,8 @@ await new Promise((r) => setTimeout(r, 300));
 const client = new McpClient(MCP_SERVER, {
   TB_BRIDGE_HOST: "127.0.0.1",
   TB_BRIDGE_PORT: String(PORT),
+  TB_SEARCH_TIMEOUT: "2000",
+  TB_LIST_TIMEOUT: "2000",
 });
 
 console.log("\n\x1b[1m=== thunderbird-cli MCP Server Tests ===\x1b[0m\n");

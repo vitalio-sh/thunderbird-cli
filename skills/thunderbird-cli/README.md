@@ -70,7 +70,7 @@ Full setup: <https://github.com/vitalio-sh/thunderbird-cli/blob/main/docs/SETUP.
 - Trust metadata interpretation (junk score, SPF/DKIM, contact status)
 - Prompt-injection defense — treating message bodies as untrusted input
 - Recipes for the seven most common email workflows (stats, search, read, reply, compose, attachment download, bulk archive)
-- Troubleshooting common errors: `BRIDGE_UNREACHABLE`, `EXTENSION_DISCONNECTED`, `TIMEOUT`, `NOT_FOUND`
+- Troubleshooting common errors: `BRIDGE_UNREACHABLE`, `EXTENSION_DISCONNECTED`, `TIMEOUT`, `SEARCH_UNHEALTHY`, `LIST_UNHEALTHY`, `NOT_FOUND`
 
 ## When the skill triggers
 

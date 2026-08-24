@@ -42,13 +42,19 @@ function loadConfig() {
   };
 }
 
+function parseTimeout(envValue, defaultValue) {
+  const parsed = parseInt(envValue || String(defaultValue));
+  return isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
+}
+
 const config = loadConfig();
 const BASE_URL = `http://${config.host}:${config.port}`;
-const DEFAULT_PREFLIGHT_TIMEOUT = parseInt(
-  process.env.TB_BRIDGE_PREFLIGHT_TIMEOUT || "3000"
+const DEFAULT_PREFLIGHT_TIMEOUT = parseTimeout(
+  process.env.TB_BRIDGE_PREFLIGHT_TIMEOUT,
+  3000
 );
-const SEARCH_TIMEOUT_MS = parseInt(process.env.TB_SEARCH_TIMEOUT || "5000");
-const LIST_TIMEOUT_MS = parseInt(process.env.TB_LIST_TIMEOUT || "5000");
+const SEARCH_TIMEOUT_MS = parseTimeout(process.env.TB_SEARCH_TIMEOUT, 5000);
+const LIST_TIMEOUT_MS = parseTimeout(process.env.TB_LIST_TIMEOUT, 5000);
 
 function getOperationTimeout(path, timeout) {
   if (path === "/messages/search") return Math.min(timeout, SEARCH_TIMEOUT_MS);
@@ -93,6 +99,16 @@ async function getBridgeStatus(timeout = DEFAULT_PREFLIGHT_TIMEOUT) {
       throw makeError("Cannot connect to bridge. Is it running?", "BRIDGE_UNREACHABLE");
     }
     throw err;
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let errorMsg = `Bridge status check failed: HTTP ${res.status}`;
+    try {
+      const data = JSON.parse(text);
+      if (data.error) errorMsg = data.error;
+    } catch {}
+    throw makeError(errorMsg, res.status === 401 || res.status === 403 ? "BRIDGE_UNREACHABLE" : "THUNDERBIRD_ERROR");
   }
 
   return await res.json();

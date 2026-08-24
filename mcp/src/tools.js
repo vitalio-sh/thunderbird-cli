@@ -86,14 +86,14 @@ export const tools = [
           args.from ||
           args.to ||
           args.subject ||
-          args.unread !== undefined ||
-          args.flagged !== undefined ||
+          args.unread ||
+          args.flagged ||
           args.tag ||
           args.since ||
           args.until ||
           args.hasAttachment ||
-          args.sizeMin !== undefined ||
-          args.sizeMax !== undefined
+          args.sizeMin ||
+          args.sizeMax
       );
       const query = args.query?.trim();
       if (!query && !hasStructuredConstraint) {

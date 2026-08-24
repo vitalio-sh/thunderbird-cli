@@ -53,7 +53,7 @@ Every command outputs atomic JSON:
 { "ok": false, "error": "message", "code": "ERROR_CODE" }
 ```
 
-Error codes: `BRIDGE_UNREACHABLE`, `EXTENSION_DISCONNECTED`, `TIMEOUT`, `NOT_FOUND`, `INVALID_ARGS`, `THUNDERBIRD_ERROR`. Don't invent new ones — pick an existing one or extend the union intentionally.
+Error codes: `BRIDGE_UNREACHABLE`, `EXTENSION_DISCONNECTED`, `TIMEOUT`, `SEARCH_UNHEALTHY`, `LIST_UNHEALTHY`, `NOT_FOUND`, `INVALID_ARGS`, `THUNDERBIRD_ERROR`. Don't invent new ones — pick an existing one or extend the union intentionally.
 
 ### Safety defaults (NEVER weaken)
 
