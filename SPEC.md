@@ -562,6 +562,8 @@ Environment variables override config:
 | `BRIDGE_UNREACHABLE` | Bridge is not running |
 | `EXTENSION_DISCONNECTED` | Thunderbird extension not connected to bridge |
 | `TIMEOUT` | Request to extension timed out (30s) |
+| `SEARCH_UNHEALTHY` | Search operation timed out (controlled by TB_SEARCH_TIMEOUT, default 5000ms) |
+| `LIST_UNHEALTHY` | List operation timed out (controlled by TB_LIST_TIMEOUT, default 5000ms) |
 | `NOT_FOUND` | Message/folder/account not found |
 | `INVALID_ARGS` | Bad CLI arguments |
 | `THUNDERBIRD_ERROR` | Error from Thunderbird messenger API |

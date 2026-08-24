@@ -13,6 +13,8 @@ import { randomUUID, randomUUID as uuid } from "crypto";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MCP_SERVER = join(__dirname, "../mcp/src/server.js");
@@ -22,6 +24,8 @@ const WS_PORT = 19801;
 let passed = 0,
   failed = 0;
 const failures = [];
+let forcedExtensionState = "connected";
+let forwardCount = 0;
 
 // ─── Mock bridge handler ───────────────────────────────────────────
 
@@ -58,6 +62,10 @@ function handle({ method, path, body }) {
       totalMessageCount: 50,
     };
   if (path === "/messages/search")
+    if (body?.query === "__nohit__") {
+      return { messages: [], total: 0, offset: 0, hasMore: false };
+    }
+  if (path === "/messages/search")
     return {
       messages: [
         {
@@ -76,6 +84,10 @@ function handle({ method, path, body }) {
       offset: 0,
       hasMore: false,
     };
+  if (path === "/messages/list")
+    if (body?.folderId === "timeout-folder") {
+      return { __hang__: true };
+    }
   if (path === "/messages/list")
     return {
       messages: [
@@ -149,7 +161,7 @@ async function startBridge() {
       res.setHeader("Content-Type", "application/json");
       if (req.url === "/bridge/status") {
         res.writeHead(200);
-        res.end(JSON.stringify({ bridge: "running", extension: "connected" }));
+        res.end(JSON.stringify({ bridge: "running", extension: forcedExtensionState }));
         return;
       }
       let b = "";
@@ -171,6 +183,7 @@ async function startBridge() {
             reject(new Error("timeout"));
           }, 5000);
           pending.set(id, { resolve, reject, timer });
+          forwardCount++;
           extSock.send(JSON.stringify({ id, method: req.method, path: req.url, body: pb }));
         });
         res.writeHead(200);
@@ -185,7 +198,10 @@ async function startBridge() {
       mock.on("open", () => resolve({ httpServer, wss, mock }));
       mock.on("message", (d) => {
         const r = JSON.parse(d.toString());
-        mock.send(JSON.stringify({ id: r.id, result: handle(r) }));
+        const result = handle(r);
+        if (result?.__hang__) return;
+        if (r.path === "/messages/search" && r.body?.query === "__simulate_search_timeout__") return;
+        mock.send(JSON.stringify({ id: r.id, result }));
       });
     });
   });
@@ -276,6 +292,16 @@ class McpClient {
   }
 }
 
+async function waitForExit(proc, timeoutMs = 3000) {
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("process exit timeout")), timeoutMs);
+    proc.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+  });
+}
+
 // ─── Test runner ───────────────────────────────────────────────────
 
 function test(name, result, check) {
@@ -296,6 +322,8 @@ await new Promise((r) => setTimeout(r, 300));
 const client = new McpClient(MCP_SERVER, {
   TB_BRIDGE_HOST: "127.0.0.1",
   TB_BRIDGE_PORT: String(PORT),
+  TB_SEARCH_TIMEOUT: "2000",
+  TB_LIST_TIMEOUT: "2000",
 });
 
 console.log("\n\x1b[1m=== thunderbird-cli MCP Server Tests ===\x1b[0m\n");
@@ -338,11 +366,51 @@ test(
   }),
   (r) => r.messages !== undefined
 );
+test(
+  "email_search with structured filters and no body query",
+  await client.callTool("email_search", {
+    subject: "test",
+    unread: true,
+    limit: 5,
+  }),
+  (r) => r.messages !== undefined
+);
+test(
+  "email_search with no hits returns empty success result",
+  await client.callTool("email_search", { query: "__nohit__", limit: 5 }),
+  (r) => Array.isArray(r.messages) && r.messages.length === 0 && r.total === 0
+);
+const baselineForwardCount = forwardCount;
+forcedExtensionState = "disconnected";
+const disconnectedSearch = await client.callTool("email_search", { query: "test" });
+forcedExtensionState = "connected";
+test(
+  "email_search fails fast when extension is disconnected",
+  { disconnectedSearch, baselineForwardCount, forwardCount },
+  (r) =>
+    r.disconnectedSearch.code === "EXTENSION_DISCONNECTED" &&
+    r.forwardCount === r.baselineForwardCount
+);
+test(
+  "email_search timeout maps to SEARCH_UNHEALTHY",
+  await client.callTool("email_search", { query: "__simulate_search_timeout__" }),
+  (r) => r.code === "SEARCH_UNHEALTHY"
+);
+test(
+  "email_search without query or structured filters returns invalid args",
+  await client.callTool("email_search", {}),
+  (r) => r.code === "INVALID_ARGS"
+);
 
 test(
   "email_list",
   await client.callTool("email_list", { folderId: "f1" }),
   (r) => r.messages !== undefined
+);
+test(
+  "email_list timeout maps to LIST_UNHEALTHY",
+  await client.callTool("email_list", { folderId: "timeout-folder" }),
+  (r) => r.code === "LIST_UNHEALTHY"
 );
 test(
   "email_list with sort",
@@ -494,6 +562,33 @@ test(
 console.log("\n\x1b[1mError handling\x1b[0m");
 const unknownTool = await client.callTool("nonexistent_tool", {});
 test("unknown tool returns error", unknownTool, (r) => r.error?.includes("Unknown tool"));
+
+console.log("\n\x1b[1mSingleton\x1b[0m");
+const lockDir = mkdtempSync(join(tmpdir(), "tb-mcp-lock-"));
+const singletonEnv = {
+  TB_BRIDGE_HOST: "127.0.0.1",
+  TB_BRIDGE_PORT: String(PORT),
+  TB_MCP_LOCK_DIR: lockDir,
+};
+const primarySingleton = new McpClient(MCP_SERVER, singletonEnv);
+await primarySingleton.initialize();
+const duplicateProc = spawn("node", [MCP_SERVER], {
+  stdio: ["pipe", "pipe", "pipe"],
+  env: { ...process.env, ...singletonEnv },
+});
+let duplicateStderr = "";
+duplicateProc.stderr.on("data", (chunk) => {
+  duplicateStderr += chunk.toString();
+});
+const duplicateExit = await waitForExit(duplicateProc);
+await new Promise((resolve) => setTimeout(resolve, 50));
+test(
+  "duplicate MCP server instance exits with singleton error",
+  { duplicateExit, duplicateStderr },
+  (r) => r.duplicateExit.code !== 0 && /MCP_SINGLETON_ACTIVE/.test(r.duplicateStderr)
+);
+primarySingleton.close();
+rmSync(lockDir, { recursive: true, force: true });
 
 // Summary
 console.log(`\n\x1b[1m${"─".repeat(40)}\x1b[0m`);

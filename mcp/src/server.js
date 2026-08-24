@@ -25,11 +25,72 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 import { api } from "./client.js";
 import { tools } from "./tools.js";
 
 // ─── Server setup ──────────────────────────────────────────────────
+
+const LOCK_DIR = process.env.TB_MCP_LOCK_DIR || tmpdir();
+const LOCK_PATH = join(LOCK_DIR, "thunderbird-cli-mcp.lock.json");
+
+function makeError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+function acquireSingletonLock() {
+  mkdirSync(LOCK_DIR, { recursive: true });
+  const payload = JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() });
+
+  try {
+    writeFileSync(LOCK_PATH, payload, { flag: "wx" });
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+
+    let existing;
+    try {
+      existing = JSON.parse(readFileSync(LOCK_PATH, "utf8"));
+    } catch {
+      rmSync(LOCK_PATH, { force: true });
+      writeFileSync(LOCK_PATH, payload, { flag: "wx" });
+      return;
+    }
+
+    if (isPidAlive(existing.pid)) {
+      throw makeError(
+        "MCP_SINGLETON_ACTIVE",
+        `thunderbird-cli MCP server already running with pid ${existing.pid}`
+      );
+    }
+
+    rmSync(LOCK_PATH, { force: true });
+    writeFileSync(LOCK_PATH, payload, { flag: "wx" });
+  }
+}
+
+function releaseSingletonLock() {
+  try {
+    const existing = JSON.parse(readFileSync(LOCK_PATH, "utf8"));
+    if (existing.pid === process.pid) {
+      rmSync(LOCK_PATH, { force: true });
+    }
+  } catch {}
+}
 
 const server = new Server(
   {
@@ -90,6 +151,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // ─── Start ─────────────────────────────────────────────────────────
 
 async function main() {
+  acquireSingletonLock();
+  process.on("exit", releaseSingletonLock);
+  process.on("SIGINT", () => {
+    releaseSingletonLock();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    releaseSingletonLock();
+    process.exit(143);
+  });
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Log to stderr — stdout is reserved for MCP JSON-RPC protocol
@@ -99,6 +171,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[tb-mcp] Fatal:", err);
+  releaseSingletonLock();
+  console.error("[tb-mcp] Fatal:", err.code || "UNKNOWN", err.message || err);
   process.exit(1);
 });
