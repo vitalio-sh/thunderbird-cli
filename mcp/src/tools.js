@@ -78,10 +78,34 @@ export const tools = [
         },
         limit: { type: "number", description: "Max results", default: 25 },
       },
-      required: ["query"],
     },
     handler: async (args, api) => {
-      const body = { query: args.query, limit: args.limit || 25 };
+      const hasStructuredConstraint = Boolean(
+        args.accountId ||
+          args.folderId ||
+          args.from ||
+          args.to ||
+          args.subject ||
+          args.unread !== undefined ||
+          args.flagged !== undefined ||
+          args.tag ||
+          args.since ||
+          args.until ||
+          args.hasAttachment ||
+          args.sizeMin !== undefined ||
+          args.sizeMax !== undefined
+      );
+      const query = args.query?.trim();
+      if (!query && !hasStructuredConstraint) {
+        const error = new Error(
+          "email_search requires a body query or at least one structured filter"
+        );
+        error.code = "INVALID_ARGS";
+        throw error;
+      }
+
+      const body = { limit: args.limit || 25 };
+      if (query) body.query = query;
       if (args.accountId) body.accountId = args.accountId;
       if (args.folderId) body.folderId = args.folderId;
       if (args.from) body.fromAddress = args.from;

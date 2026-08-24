@@ -43,38 +43,107 @@ function loadConfig() {
 
 const config = loadConfig();
 const BASE_URL = `http://${config.host}:${config.port}`;
+const DEFAULT_PREFLIGHT_TIMEOUT = parseInt(
+  process.env.TB_BRIDGE_PREFLIGHT_TIMEOUT || "3000"
+);
+const SEARCH_TIMEOUT_MS = parseInt(process.env.TB_SEARCH_TIMEOUT || "5000");
+const LIST_TIMEOUT_MS = parseInt(process.env.TB_LIST_TIMEOUT || "5000");
 
-/**
- * Make an HTTP call to the bridge daemon.
- */
-export async function api(method, path, body = null, timeout = 30000) {
-  const url = `${BASE_URL}${path}`;
+function getOperationTimeout(path, timeout) {
+  if (path === "/messages/search") return Math.min(timeout, SEARCH_TIMEOUT_MS);
+  if (path === "/messages/list") return Math.min(timeout, LIST_TIMEOUT_MS);
+  return timeout;
+}
+
+function makeError(message, code) {
+  return Object.assign(new Error(message), { code });
+}
+
+function mapTimeoutCode(path) {
+  if (path === "/messages/search") return "SEARCH_UNHEALTHY";
+  if (path === "/messages/list") return "LIST_UNHEALTHY";
+  return "TIMEOUT";
+}
+
+function mapBridgeError(path, status, message) {
+  if (status === 503 || /not connected/i.test(message)) {
+    return makeError(message, "EXTENSION_DISCONNECTED");
+  }
+  if (/timed out/i.test(message)) {
+    return makeError(message, mapTimeoutCode(path));
+  }
+  return makeError(message, "THUNDERBIRD_ERROR");
+}
+
+async function getBridgeStatus(timeout = DEFAULT_PREFLIGHT_TIMEOUT) {
+  const url = `${BASE_URL}/bridge/status`;
   const headers = { "Content-Type": "application/json" };
   if (config.authToken) headers["Authorization"] = `Bearer ${config.authToken}`;
-  // Tell the bridge how long it should wait for Thunderbird before giving up.
-  if (timeout) headers["X-TB-Timeout"] = String(timeout);
-
-  const opts = { method, headers };
-  if (body && (method === "POST" || method === "PUT")) {
-    opts.body = JSON.stringify(body);
-  }
-  if (timeout) opts.signal = AbortSignal.timeout(timeout);
+  const opts = { method: "GET", headers, signal: AbortSignal.timeout(timeout) };
 
   let res;
   try {
     res = await fetch(url, opts);
   } catch (err) {
     if (err.name === "TimeoutError") {
-      throw Object.assign(new Error("Request timed out"), { code: "TIMEOUT" });
+      throw makeError("Bridge status check timed out", "TIMEOUT");
     }
     if (err.code === "ECONNREFUSED" || err.cause?.code === "ECONNREFUSED") {
-      throw Object.assign(
-        new Error(
-          "Cannot connect to Thunderbird bridge at " +
-            BASE_URL +
-            ". Is the bridge daemon running? See https://github.com/vitalio-sh/thunderbird-cli#quick-start"
-        ),
-        { code: "BRIDGE_UNREACHABLE" }
+      throw makeError(
+        "Cannot connect to Thunderbird bridge at " +
+          BASE_URL +
+          ". Is the bridge daemon running? See https://github.com/vitalio-sh/thunderbird-cli#quick-start",
+        "BRIDGE_UNREACHABLE"
+      );
+    }
+    throw err;
+  }
+
+  return await res.json();
+}
+
+async function ensureBridgeReady(path, timeout) {
+  if (path === "/bridge/status") return;
+  const status = await getBridgeStatus(Math.min(timeout, DEFAULT_PREFLIGHT_TIMEOUT));
+  if (status.extension !== "connected") {
+    throw makeError(
+      "Thunderbird extension not connected. Is Thunderbird running?",
+      "EXTENSION_DISCONNECTED"
+    );
+  }
+}
+
+/**
+ * Make an HTTP call to the bridge daemon.
+ */
+export async function api(method, path, body = null, timeout = 30000) {
+  const effectiveTimeout = getOperationTimeout(path, timeout);
+  await ensureBridgeReady(path, effectiveTimeout);
+  const url = `${BASE_URL}${path}`;
+  const headers = { "Content-Type": "application/json" };
+  if (config.authToken) headers["Authorization"] = `Bearer ${config.authToken}`;
+  // Tell the bridge how long it should wait for Thunderbird before giving up.
+  if (effectiveTimeout) headers["X-TB-Timeout"] = String(effectiveTimeout);
+
+  const opts = { method, headers };
+  if (body && (method === "POST" || method === "PUT")) {
+    opts.body = JSON.stringify(body);
+  }
+  if (effectiveTimeout) opts.signal = AbortSignal.timeout(effectiveTimeout);
+
+  let res;
+  try {
+    res = await fetch(url, opts);
+  } catch (err) {
+    if (err.name === "TimeoutError") {
+      throw makeError("Request timed out", mapTimeoutCode(path));
+    }
+    if (err.code === "ECONNREFUSED" || err.cause?.code === "ECONNREFUSED") {
+      throw makeError(
+        "Cannot connect to Thunderbird bridge at " +
+          BASE_URL +
+          ". Is the bridge daemon running? See https://github.com/vitalio-sh/thunderbird-cli#quick-start",
+        "BRIDGE_UNREACHABLE"
       );
     }
     throw err;
@@ -82,10 +151,7 @@ export async function api(method, path, body = null, timeout = 30000) {
 
   const data = await res.json();
   if (res.status >= 400) {
-    const err = new Error(data.error || `HTTP ${res.status}`);
-    err.code =
-      data.code || (res.status === 503 ? "EXTENSION_DISCONNECTED" : "THUNDERBIRD_ERROR");
-    throw err;
+    throw mapBridgeError(path, res.status, data.error || `HTTP ${res.status}`);
   }
   return data;
 }
