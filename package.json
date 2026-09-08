@@ -12,6 +12,8 @@
   "scripts": {
     "test": "node test/quick-test.mjs",
     "test:mcp": "node test/mcp-test.mjs",
+    "test:live-attachment": "node test/live-attachment-smoke.mjs",
+    "test:live-smoke": "node test/live-smoke.mjs",
     "bridge": "node bridge/bridge.js",
     "tb": "node cli/src/cli.js",
     "build:xpi": "node scripts/build-xpi.mjs"
