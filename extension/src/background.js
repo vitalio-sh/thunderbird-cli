@@ -163,6 +163,19 @@ async function handleRequest({ method, path, body }) {
     return { status: "ok", version: "2.0.0", thunderbird: true };
   }
 
+  if (path === "/debug/compose-capabilities" && method === "GET") {
+    const compose = messenger.compose || {};
+    return {
+      composeKeys: Object.keys(compose).sort(),
+      hasBeginReply: typeof compose.beginReply === "function",
+      hasBeginNew: typeof compose.beginNew === "function",
+      hasBeginEditDraft: typeof compose.beginEditDraft === "function",
+      hasGetComposeDetails: typeof compose.getComposeDetails === "function",
+      hasSetComposeDetails: typeof compose.setComposeDetails === "function",
+      hasSaveMessage: typeof compose.saveMessage === "function",
+    };
+  }
+
   // ─── Accounts ───────────────────────────────────────────────────
 
   if (path === "/accounts" && method === "GET") {

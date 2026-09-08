@@ -14,6 +14,24 @@ let passed = 0, failed = 0;
 
 function handle({ method, path, body }) {
   if (path === "/health") return { status: "ok", version: "2.0.0", thunderbird: true };
+  if (path === "/debug/compose-capabilities" && method === "GET") {
+    return {
+      composeKeys: [
+        "beginEditDraft",
+        "beginNew",
+        "beginReply",
+        "getComposeDetails",
+        "saveMessage",
+        "setComposeDetails",
+      ],
+      hasBeginReply: true,
+      hasBeginNew: true,
+      hasBeginEditDraft: true,
+      hasGetComposeDetails: true,
+      hasSetComposeDetails: true,
+      hasSaveMessage: true,
+    };
+  }
   if (path === "/accounts") return [{ id: "acct1", name: "Test", type: "imap", identities: [{ id: "id1", email: "t@t.com", name: "T" }], rootFolder: { id: "rf", name: "" } }];
   if (path?.match(/^\/accounts\/[^/]+$/) && method === "GET") return { id: "acct1", name: "Test" };
   if (path?.match(/^\/accounts\/[^/]+\/folders$/)) return [{ id: "f1", name: "Inbox", path: "/Inbox", type: "inbox", depth: 0, unreadMessageCount: 5, totalMessageCount: 50 }];
@@ -172,6 +190,7 @@ test("POST /compose send", await httpCall("POST", "/compose", { to: "a@b", body:
 test("POST /compose open", await httpCall("POST", "/compose", { to: "a@b", body: "Hi", open: true }), r => r.action === "draft_opened");
 test("POST /reply", await httpCall("POST", "/reply", { messageId: 1, body: "Thanks" }), r => r.success);
 test("POST /forward", await httpCall("POST", "/forward", { messageId: 1, to: "c@d", body: "FYI" }), r => r.success);
+test("GET /debug/compose-capabilities", await httpCall("GET", "/debug/compose-capabilities"), r => r.hasBeginEditDraft === true && r.hasGetComposeDetails === true && r.hasSetComposeDetails === true);
 
 console.log("\n\x1b[1mStats & Recent\x1b[0m");
 test("GET /stats", await httpCall("GET", "/stats"), r => r.totalAccounts === 1);

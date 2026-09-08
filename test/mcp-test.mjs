@@ -13,8 +13,6 @@ import { randomUUID, randomUUID as uuid } from "crypto";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MCP_SERVER = join(__dirname, "../mcp/src/server.js");
@@ -292,15 +290,6 @@ class McpClient {
   }
 }
 
-async function waitForExit(proc, timeoutMs = 3000) {
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("process exit timeout")), timeoutMs);
-    proc.once("exit", (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal });
-    });
-  });
-}
 
 // ─── Test runner ───────────────────────────────────────────────────
 
@@ -563,32 +552,24 @@ console.log("\n\x1b[1mError handling\x1b[0m");
 const unknownTool = await client.callTool("nonexistent_tool", {});
 test("unknown tool returns error", unknownTool, (r) => r.error?.includes("Unknown tool"));
 
-console.log("\n\x1b[1mSingleton\x1b[0m");
-const lockDir = mkdtempSync(join(tmpdir(), "tb-mcp-lock-"));
-const singletonEnv = {
+console.log("\n\x1b[1mConcurrency\x1b[0m");
+const concurrencyEnv = {
   TB_BRIDGE_HOST: "127.0.0.1",
   TB_BRIDGE_PORT: String(PORT),
-  TB_MCP_LOCK_DIR: lockDir,
 };
-const primarySingleton = new McpClient(MCP_SERVER, singletonEnv);
-await primarySingleton.initialize();
-const duplicateProc = spawn("node", [MCP_SERVER], {
-  stdio: ["pipe", "pipe", "pipe"],
-  env: { ...process.env, ...singletonEnv },
-});
-let duplicateStderr = "";
-duplicateProc.stderr.on("data", (chunk) => {
-  duplicateStderr += chunk.toString();
-});
-const duplicateExit = await waitForExit(duplicateProc);
-await new Promise((resolve) => setTimeout(resolve, 50));
+const clientA = new McpClient(MCP_SERVER, concurrencyEnv);
+const clientB = new McpClient(MCP_SERVER, concurrencyEnv);
+await clientA.initialize();
+await clientB.initialize();
+const toolsA = await clientA.listTools();
+const toolsB = await clientB.listTools();
 test(
-  "duplicate MCP server instance exits with singleton error",
-  { duplicateExit, duplicateStderr },
-  (r) => r.duplicateExit.code !== 0 && /MCP_SINGLETON_ACTIVE/.test(r.duplicateStderr)
+  "concurrent MCP server instances initialize and list tools",
+  { toolsACount: toolsA.length, toolsBCount: toolsB.length },
+  (r) => r.toolsACount === 12 && r.toolsBCount === 12
 );
-primarySingleton.close();
-rmSync(lockDir, { recursive: true, force: true });
+clientA.close();
+clientB.close();
 
 // Summary
 console.log(`\n\x1b[1m${"─".repeat(40)}\x1b[0m`);

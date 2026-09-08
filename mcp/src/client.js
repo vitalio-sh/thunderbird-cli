@@ -52,12 +52,24 @@ const DEFAULT_PREFLIGHT_TIMEOUT = parseTimeout(
   process.env.TB_BRIDGE_PREFLIGHT_TIMEOUT,
   3000
 );
-const SEARCH_TIMEOUT_MS = parseTimeout(process.env.TB_SEARCH_TIMEOUT, 5000);
-const LIST_TIMEOUT_MS = parseTimeout(process.env.TB_LIST_TIMEOUT, 5000);
+const SEARCH_TIMEOUT_MS = parseTimeout(process.env.TB_SEARCH_TIMEOUT, 120000);
+const LIST_TIMEOUT_MS = parseTimeout(process.env.TB_LIST_TIMEOUT, 30000);
 
 function getOperationTimeout(path, timeout) {
-  if (path === "/messages/search") return Math.min(timeout, SEARCH_TIMEOUT_MS);
-  if (path === "/messages/list") return Math.min(timeout, LIST_TIMEOUT_MS);
+  if (path === "/messages/search") {
+    return process.env.TB_SEARCH_TIMEOUT
+      ? SEARCH_TIMEOUT_MS
+      : timeout && timeout !== 30000
+      ? timeout
+      : SEARCH_TIMEOUT_MS;
+  }
+  if (path === "/messages/list") {
+    return process.env.TB_LIST_TIMEOUT
+      ? LIST_TIMEOUT_MS
+      : timeout && timeout !== 30000
+      ? timeout
+      : LIST_TIMEOUT_MS;
+  }
   return timeout;
 }
 
