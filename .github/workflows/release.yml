@@ -28,30 +28,30 @@ jobs:
           npm test
           npm run test:mcp
 
-      - name: Build unsigned XPI
+      - name: Build XPI from source
         run: npm run build:xpi
 
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
 
-      - name: Find signed XPI
+      - name: Find release XPI
         id: xpi
         run: |
           # The Thunderbird extension version (in manifest.json) is independent of
-          # the npm/release version. We attach whichever signed XPI is in dist/releases/.
+          # the npm/release version. We attach the newest release XPI in dist/releases/.
           SIGNED_XPI=$(find dist/releases -name "*-tb.xpi" -type f | sort -V | tail -1)
           if [ -z "$SIGNED_XPI" ]; then
-            echo "::error::No signed XPI found in dist/releases/"
+            echo "::error::No release XPI found in dist/releases/"
             echo "Expected: dist/releases/*-tb.xpi"
-            echo "Upload an ATN-signed XPI to dist/releases/ before tagging."
+            echo "Add the XPI returned by addons.thunderbird.net to dist/releases/ before tagging."
             exit 1
           fi
           echo "signed=$SIGNED_XPI" >> "$GITHUB_OUTPUT"
-          echo "Found signed XPI: $SIGNED_XPI"
+          echo "Found release XPI: $SIGNED_XPI"
           UNSIGNED_XPI=$(find dist -maxdepth 1 -name "thunderbird-cli-*.xpi" -type f | sort -V | tail -1)
           echo "unsigned=$UNSIGNED_XPI" >> "$GITHUB_OUTPUT"
-          echo "Found unsigned XPI: $UNSIGNED_XPI"
+          echo "Found source-built XPI: $UNSIGNED_XPI"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -65,7 +65,7 @@ jobs:
 
             ### Install the Thunderbird extension
 
-            Download the attached **`thunderbird_ai_bridge-*-tb.xpi`** (signed by Mozilla via addons.thunderbird.net; the extension has its own version number) and install via:
+            Download the attached **`thunderbird_ai_bridge-*-tb.xpi`** (the build distributed through addons.thunderbird.net, byte-identical to `extension/` at this tag; no embedded signature; the extension has its own version number) and install via:
             1. Thunderbird → **Add-ons and Themes**
             2. ⚙ gear icon → **Install Add-on From File…**
             3. Select the downloaded `.xpi`

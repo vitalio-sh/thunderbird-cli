@@ -53,7 +53,13 @@ export const tools = [
       properties: {
         query: {
           type: "string",
-          description: "Full-text search query (searches body). Optional when at least one filter is given",
+          description: "Full-text search query. Optional when at least one filter is given",
+        },
+        searchMode: {
+          type: "string",
+          enum: ["fulltext", "body"],
+          description:
+            "fulltext (default): Thunderbird's search index over subject, body and author — fast on large mailboxes, needs Global Search enabled in Thunderbird. body: scans message bodies directly — slow, may time out on big folders.",
         },
         accountId: { type: "string", description: "Limit to specific account" },
         folderId: { type: "string", description: "Limit to specific folder" },
@@ -93,6 +99,7 @@ export const tools = [
       }
       const body = { limit: args.limit || 25 };
       if (query) body.query = query;
+      if (args.searchMode) body.searchMode = args.searchMode;
       if (args.accountId) body.accountId = args.accountId;
       if (args.folderId) body.folderId = args.folderId;
       if (args.from) body.fromAddress = args.from;
@@ -107,7 +114,15 @@ export const tools = [
       if (args.sizeMin) body.sizeMin = args.sizeMin;
       if (args.sizeMax) body.sizeMax = args.sizeMax;
       if (args.includeJunk) body.includeJunk = true;
-      return await api("POST", "/messages/search", body);
+      try {
+        return await api("POST", "/messages/search", body);
+      } catch (err) {
+        if (err.code === "TIMEOUT") {
+          err.message =
+            "Search timed out before finishing — results are UNKNOWN, not empty. Narrow it with since/until or folderId, or use searchMode \"fulltext\".";
+        }
+        throw err;
+      }
     },
   },
 
@@ -341,7 +356,7 @@ export const tools = [
   {
     name: "email_mark",
     description:
-      "Update message flags: read/unread, flagged/unflagged, junk/not-junk. Accepts a single ID or array of IDs for batch operations.",
+      "Update message flags and tags: read/unread, flagged/unflagged, junk/not-junk, and IMAP tag keywords (e.g. $label1). Accepts an array of IDs for batch operations. Use addTags/removeTags to change tags without touching the others; `tags` replaces the whole set.",
     inputSchema: {
       type: "object",
       properties: {
@@ -353,17 +368,45 @@ export const tools = [
         read: { type: "boolean", description: "Mark as read (true) or unread (false)" },
         flagged: { type: "boolean", description: "Flag (true) or unflag (false)" },
         junk: { type: "boolean", description: "Mark junk (true) or not-junk (false)" },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Replace all tags with exactly these tag keys (use [] to clear). Cannot be combined with addTags/removeTags",
+        },
+        addTags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tag keys to add, keeping existing tags (see the tags list from email_stats / tb tags)",
+        },
+        removeTags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tag keys to remove, keeping the others",
+        },
       },
       required: ["messageIds"],
     },
     handler: async (args, api) => {
+      const editsTags = args.addTags?.length || args.removeTags?.length;
+      if (args.tags && editsTags) {
+        throw Object.assign(new Error("Use either tags (replace) or addTags/removeTags, not both"), {
+          code: "INVALID_ARGS",
+        });
+      }
       const props = {};
       if (args.read !== undefined) props.read = args.read;
       if (args.flagged !== undefined) props.flagged = args.flagged;
       if (args.junk !== undefined) props.junk = args.junk;
+      if (args.tags) props.tags = [...new Set(args.tags)];
       const results = [];
       for (const id of args.messageIds) {
-        results.push(await api("POST", "/messages/update", { messageId: id, ...props }));
+        const update = { messageId: id, ...props };
+        if (editsTags) {
+          const current = (await api("GET", `/messages/${id}/headers`)).tags || [];
+          const removed = new Set(args.removeTags || []);
+          update.tags = [...new Set([...current, ...(args.addTags || [])])].filter((t) => !removed.has(t));
+        }
+        results.push(await api("POST", "/messages/update", update));
       }
       return { success: true, updated: results.length };
     },

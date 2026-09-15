@@ -44,7 +44,7 @@ Skills are supported on the API via the Code Execution Tool beta. See Anthropic'
 The skill itself is just instructions — it needs the MCP server to do anything. Before enabling, set up the full stack:
 
 1. **Install Thunderbird 128+** with your email accounts configured (normal Thunderbird install).
-2. **Install the signed WebExtension** from [Releases](https://github.com/vitalio-sh/thunderbird-cli/releases/latest) → *Install Add-on From File…* in Thunderbird.
+2. **Install the WebExtension** from [Releases](https://github.com/vitalio-sh/thunderbird-cli/releases/latest) → *Install Add-on From File…* in Thunderbird.
 3. **Start the bridge daemon:** `npm install -g thunderbird-cli-bridge && tb-bridge`
 4. **Configure the MCP server** in `claude_desktop_config.json` (or equivalent):
    ```json

@@ -2,6 +2,6 @@ node_modules/
 .DS_Store
 cli/config.json
 
-# Build output — exclude dist/ except for signed releases
+# Build output — exclude dist/ except for release XPIs in dist/releases/
 dist/*
 !dist/releases/

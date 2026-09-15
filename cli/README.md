@@ -26,7 +26,7 @@ This package alone is **not enough**. You need:
 
 1. **Mozilla Thunderbird 128+** with email accounts configured
 2. **`thunderbird-cli-bridge`** daemon running on `127.0.0.1:7700`
-3. **The signed Thunderbird WebExtension** loaded in Thunderbird
+3. **The Thunderbird WebExtension** loaded in Thunderbird
 
 See the [main repo setup guide](https://github.com/vitalio-sh/thunderbird-cli/blob/main/docs/SETUP.md) for the full installation.
 

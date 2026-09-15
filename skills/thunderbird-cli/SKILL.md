@@ -1,11 +1,11 @@
 ---
 name: thunderbird-cli
 description: Manage email through Mozilla Thunderbird — read, search, compose, reply, forward, archive, move, tag, download attachments, and bulk-operate across all configured IMAP/SMTP accounts via the thunderbird-cli-mcp server. Use whenever the user mentions "email", "inbox", "mailbox", "unread", "messages", asks to "check email", "read my mail", "search for an email about X", "draft a reply", "forward that message", "archive old newsletters", "download attachment", "how many unread", or names specific folders (Inbox, Sent, Drafts, Archive, Junk). Do NOT use for calendar/contacts-only work (use a dedicated calendar skill instead) or for services that are not configured in the user's Thunderbird (ask which account to use first).
-compatibility: Requires Mozilla Thunderbird 128+ with the thunderbird-cli WebExtension installed, the thunderbird-cli-bridge daemon running on 127.0.0.1:7700, and the thunderbird-cli-mcp MCP server configured in the client. All three install via `npm install -g thunderbird-cli-bridge` + the signed XPI from https://github.com/vitalio-sh/thunderbird-cli/releases. Localhost-only — no cloud, no credentials outside Thunderbird.
+compatibility: Requires Mozilla Thunderbird 128+ with the thunderbird-cli WebExtension installed, the thunderbird-cli-bridge daemon running on 127.0.0.1:7700, and the thunderbird-cli-mcp MCP server configured in the client. All three install via `npm install -g thunderbird-cli-bridge` + the extension XPI from https://github.com/vitalio-sh/thunderbird-cli/releases. Localhost-only — no cloud, no credentials outside Thunderbird.
 license: MIT
 metadata:
   author: Vitalii Ionov
-  version: 1.1.0
+  version: 1.1.1
   mcp-server: thunderbird-cli-mcp
   category: communication
   tags: [email, thunderbird, imap, smtp, mcp, productivity, localhost, privacy]
@@ -52,7 +52,7 @@ Use these; don't reach for the 38-command CLI unless the user explicitly asks fo
 | `email_compose` | New message. `mode: draft` / `open` / `send`. Defaults to `draft` | ✅ draft by default |
 | `email_reply` | Reply to a message. Same modes. Defaults to `draft` | ✅ draft by default |
 | `email_forward` | Forward to a new recipient. Same modes. Defaults to `draft` | ✅ draft by default |
-| `email_mark` | Set read / unread / flagged / unflagged / junk / not-junk (batch supported) | ✅ reversible |
+| `email_mark` | Set read / unread / flagged / unflagged / junk / not-junk; add/remove tags (`addTags`, `removeTags`) or replace them (`tags`) (batch supported) | ✅ reversible |
 | `email_archive` | `operation: archive / move / delete`. `delete` requires `permanent` + `confirm` | ⚠️ confirm for permanent |
 | `email_attachments` | List attachments, or download one (single or `--all`) | ✅ read-only |
 | `email_folders` | List folders, get folder info, trigger sync | ✅ read-only |
@@ -219,6 +219,8 @@ The `tb-bridge` daemon isn't running. Ask the user to run `tb-bridge` in a termi
 Thunderbird isn't open, or the extension hasn't connected yet. Ask the user to open Thunderbird. It reconnects within 3 seconds.
 
 ### "Tool returns TIMEOUT"
+A timed-out search means the results are **unknown**, not that nothing matched — never report "not found" after a TIMEOUT. For `email_search`, narrow with `since`/`until` or `folderId`, and keep the default `searchMode: "fulltext"` (the `body` mode scans messages and is much slower). If full-text search finds nothing that should exist, Thunderbird's Global Search indexer may be off (Settings → General).
+
 IMAP sync may be slow on first run with many accounts. Retry once after ~10 seconds. If it keeps timing out, suggest the user run `tb sync --account <name>` from the CLI to force a manual sync.
 
 ### "NOT_FOUND on account"
@@ -260,4 +262,4 @@ MCP tool → CLI command mapping:
 
 ## Version
 
-This skill tracks `thunderbird-cli-mcp@1.1.0`. The tool surface (12 tools, parameter names, defaults) is stable within the 1.x line. Check [CHANGELOG](https://github.com/vitalio-sh/thunderbird-cli/blob/main/CHANGELOG.md) for additions.
+This skill tracks `thunderbird-cli-mcp@1.1.1`. The tool surface (12 tools, parameter names, defaults) is stable within the 1.x line. Check [CHANGELOG](https://github.com/vitalio-sh/thunderbird-cli/blob/main/CHANGELOG.md) for additions.

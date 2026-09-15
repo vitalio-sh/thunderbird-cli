@@ -71,7 +71,7 @@
     <rect x="1200" y="288" width="280" height="92" rx="10" ry="10" fill="#0d1117" stroke="#30363d"/>
     <text x="1340" y="318" text-anchor="middle" font-size="17" font-weight="700" fill="#d15228">WebExtension</text>
     <text x="1340" y="341" text-anchor="middle" font-size="12" fill="#e6edf3">43 route handlers · WS client</text>
-    <text x="1340" y="361" text-anchor="middle" font-size="12" fill="#8b949e">signed on addons.thunderbird.net</text>
+    <text x="1340" y="361" text-anchor="middle" font-size="12" fill="#8b949e">via addons.thunderbird.net</text>
 
     <text x="1340" y="410" text-anchor="middle" font-size="13" fill="#8b949e">calls</text>
     <line x1="1340" y1="380" x2="1340" y2="432" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrowDim)"/>

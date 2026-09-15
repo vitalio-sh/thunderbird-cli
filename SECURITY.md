@@ -4,6 +4,12 @@
 ## Based on OWASP 2025 Top 10 for LLM Applications (LLM01: Prompt Injection)
 ## and real-world incidents (EchoLeak CVE-2025-32711, Morris-II worm, LLMail-Inject).
 
+## Reporting a vulnerability
+
+Please report security issues privately via GitHub:
+**[Report a vulnerability](https://github.com/vitalio-sh/thunderbird-cli/security/advisories/new)**
+(Security tab → "Report a vulnerability"). Don't open a public issue for exploitable problems.
+
 ---
 
 ## Threat Model
@@ -72,8 +78,10 @@ Defense: set `TB_AUTH_TOKEN` in the bridge daemon's environment so every HTTP re
 access — a token readable by every local process restores the original problem. See the bridge
 README's Authentication section.
 
-The token covers the HTTP listener only. The WebSocket listener the extension connects to still
-accepts any local non-browser connection.
+The token covers the HTTP listener only. The WebSocket listener the extension connects to is not
+authenticated, but it will not hand the extension slot to a new connection while the connected
+extension still answers a ping (`TB_BRIDGE_WS_TAKEOVER_MS`, default 2 s). A local process can
+therefore only occupy the slot while Thunderbird's extension is not connected.
 
 **Scenario 7: Hostile web page in the user's browser**
 

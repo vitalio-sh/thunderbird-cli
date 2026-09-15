@@ -203,9 +203,13 @@ async function handleRequest({ method, path, body }) {
     const { query, accountId, fromAddress, toAddress, subject,
             unreadOnly, flagged, limit = 25, fromDate, toDate,
             folderId, tag, hasAttachment, sizeMin, sizeMax,
-            includeJunk, headerMessageId } = body || {};
+            includeJunk, headerMessageId, searchMode = "fulltext" } = body || {};
     const q = {};
-    if (query) q.body = query;
+    // fullText uses Thunderbird's global search index (subject, body, author) and is fast on
+    // large mailboxes; body scans message bodies and can time out there.
+    let mode = query ? (searchMode === "body" ? "body" : "fulltext") : null;
+    if (mode === "fulltext") q.fullText = query;
+    if (mode === "body") q.body = query;
     if (accountId) q.accountId = accountId;
     if (fromAddress) q.author = fromAddress;
     if (toAddress) q.recipients = toAddress;
@@ -219,9 +223,18 @@ async function handleRequest({ method, path, body }) {
     if (hasAttachment) q.attachment = true;
     if (!includeJunk) q.junk = false;
 
-    const result = await collectMessages(
-      () => messenger.messages.query(q), limit
-    );
+    let result;
+    try {
+      result = await collectMessages(() => messenger.messages.query(q), limit);
+    } catch (e) {
+      if (mode !== "fulltext") throw e;
+      // Older Thunderbird without fullText support: fall back to a body scan.
+      delete q.fullText;
+      q.body = query;
+      mode = "body";
+      result = await collectMessages(() => messenger.messages.query(q), limit);
+    }
+    if (mode) result.searchMode = mode;
 
     // Client-side filtering for tag, sizeMin, sizeMax
     if (tag || sizeMin || sizeMax) {
@@ -244,24 +257,30 @@ async function handleRequest({ method, path, body }) {
             offset = 0, sort, sortOrder = "desc", flagged } = body || {};
     const folder = await messenger.folders.get(folderId, false);
     if (!folder) return { error: "Folder not found" };
-    const result = await collectMessages(
-      () => messenger.messages.list(folder), limit,
-      { unreadOnly, flaggedOnly: flagged || false, offset }
-    );
+    const filters = { unreadOnly, flaggedOnly: flagged || false };
 
-    // Sort results if requested
-    if (sort) {
-      const dir = sortOrder === "asc" ? 1 : -1;
-      result.messages.sort((a, b) => {
-        if (sort === "date") return dir * (new Date(a.date) - new Date(b.date));
-        if (sort === "from") return dir * (a.author || "").localeCompare(b.author || "");
-        if (sort === "subject") return dir * (a.subject || "").localeCompare(b.subject || "");
-        if (sort === "size") return dir * ((a.size || 0) - (b.size || 0));
-        return 0;
-      });
+    if (!sort) {
+      return await collectMessages(
+        () => messenger.messages.list(folder), limit, { ...filters, offset }
+      );
     }
 
-    return result;
+    // Thunderbird lists messages in database order, not by date, so sorting has to see the
+    // whole (filtered) folder before offset/limit are applied — otherwise the "newest" page
+    // is just the first N messages re-ordered.
+    const all = await collectMessages(
+      () => messenger.messages.list(folder), Infinity, { ...filters, offset: 0 }
+    );
+    const dir = sortOrder === "asc" ? 1 : -1;
+    all.messages.sort((a, b) => {
+      if (sort === "date") return dir * (new Date(a.date) - new Date(b.date));
+      if (sort === "from") return dir * (a.author || "").localeCompare(b.author || "");
+      if (sort === "subject") return dir * (a.subject || "").localeCompare(b.subject || "");
+      if (sort === "size") return dir * ((a.size || 0) - (b.size || 0));
+      return 0;
+    });
+    const messages = all.messages.slice(offset, offset + limit);
+    return { messages, total: messages.length, offset, hasMore: offset + limit < all.messages.length };
   }
 
   // ─── Read batch ─────────────────────────────────────────────────

@@ -26,8 +26,8 @@ Tested at scale: **22 accounts, 249,000+ messages, 86,000+ unread** — all mana
 - 🛡️ **Safe by default** — compose/reply/forward save as drafts; permanent delete requires `--confirm`
 - 🎯 **Token-optimized** — `--fields` selection, `--compact` mode, `--max-body` truncation
 - 🏠 **Localhost-only** — no cloud, no telemetry, nothing leaves your machine
-- ✅ **Thunderbird 128+** — signed and approved on addons.thunderbird.net
-- 🧪 **80 tests** — 46 CLI/bridge + 34 MCP integration tests
+- ✅ **Thunderbird 128+** — extension distributed through addons.thunderbird.net; the release XPI is byte-identical to [`extension/`](extension/)
+- 🧪 **235 tests** — CLI/bridge, MCP, bridge security (real bridge process) and extension background-script tests
 
 ## Quick Start
 
@@ -35,7 +35,7 @@ Tested at scale: **22 accounts, 249,000+ messages, 86,000+ unread** — all mana
 # 1. Install CLI + bridge from npm
 npm install -g thunderbird-cli thunderbird-cli-bridge
 
-# 2. Install the signed Thunderbird extension
+# 2. Install the Thunderbird extension
 #    Download: https://github.com/vitalio-sh/thunderbird-cli/releases/latest
 #    Thunderbird → Add-ons → ⚙ → Install Add-on From File… → thunderbird_ai_bridge-*.xpi
 

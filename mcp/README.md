@@ -23,7 +23,7 @@ Exposes 12 email management tools to Claude Desktop:
 | `email_compose` | Send/draft new email (default: draft, never auto-sends) |
 | `email_reply` | Reply to message (default: draft) |
 | `email_forward` | Forward to new recipient (default: draft) |
-| `email_mark` | Read/flagged/junk flags (batch supported) |
+| `email_mark` | Read/flagged/junk flags and tags — add, remove or replace (batch supported) |
 | `email_archive` | Archive, move, or delete messages |
 | `email_attachments` | List + download attachments (base64) |
 | `email_folders` | List folders, get info, trigger sync |

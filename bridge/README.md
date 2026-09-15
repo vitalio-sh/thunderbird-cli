@@ -106,6 +106,11 @@ extension:
 The bridge also pings the extension every 30 s (`TB_BRIDGE_WS_HEARTBEAT_MS`) and drops sockets
 that stop answering, so requests fail fast after the machine sleeps instead of hanging.
 
+While an extension is connected and answering pings, a second WebSocket connection is closed
+(code 1008) instead of taking over — so another local process cannot silently intercept requests.
+A new connection replaces the old one only if the old socket does not answer a ping within
+`TB_BRIDGE_WS_TAKEOVER_MS` (default 2000 ms), e.g. a half-open socket after sleep.
+
 ## Endpoints
 
 ### `GET /bridge/status`
