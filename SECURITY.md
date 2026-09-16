@@ -4,6 +4,36 @@
 ## Based on OWASP 2025 Top 10 for LLM Applications (LLM01: Prompt Injection)
 ## and real-world incidents (EchoLeak CVE-2025-32711, Morris-II worm, LLMail-Inject).
 
+## Implementation Status
+
+This document mixes implemented transport protections with a **proposed** security
+design. The eight CLI-level defenses below are not implemented guarantees.
+In particular, there is no HTML sanitizer, suspicious-pattern detector, write
+audit log, write rate limiter, or bridge `--read-only` mode. `--read-only` is rejected, not
+silently accepted. Email bodies, subjects, senders, and attachments remain
+untrusted data; an agent must not execute instructions found in them.
+
+Implemented: loopback listeners, optional HTTP and WebSocket token authentication,
+browser-origin/Host checks, a single active extension connection, bounded HTTP
+request bodies, and MCP input-schema validation. When TB_AUTH_TOKEN is set,
+the WebSocket handshake requires the same token as HTTP. These protections do not
+isolate mutually untrusted programs running under the same OS user.
+
+This fork additionally enforces a validated, build-time [access policy](docs/ACCESS-CONTROL.md)
+inside the add-on, and derives native permissions from it. Reading/searching
+remain always available. Attachment export and compose default to enabled;
+sending and existing-mailbox changes default to disabled. Unknown operations
+fail closed. This does not retrofit already signed upstream XPIs. It is an
+operation restriction, not isolation against programs that can modify the
+profile or extract attachments from raw MIME reads.
+
+Message/folder deletion and emptying Trash are absent from this fork, not merely
+disabled. No policy setting enables them and builds never request `messagesDelete`.
+Move-to-Trash uses only `messages.move`. Thunderbird UI actions, other add-ons,
+server retention and programs that can rewrite this connector are outside this
+guarantee. The deletion scenarios in the historical design below are not
+implemented capabilities.
+
 ---
 
 ## Threat Model
@@ -72,8 +102,9 @@ Defense: set `TB_AUTH_TOKEN` in the bridge daemon's environment so every HTTP re
 access — a token readable by every local process restores the original problem. See the bridge
 README's Authentication section.
 
-The token covers the HTTP listener only. The WebSocket listener the extension connects to still
-accepts any local non-browser connection.
+The token also covers the WebSocket handshake. Build the matching private add-on
+with `--auth-file local-runtime/bridge.env`; see [local setup](docs/LOCAL-SETUP.md).
+The resulting XPI contains the token and must not be published or shared.
 
 **Scenario 7: Hostile web page in the user's browser**
 
@@ -92,9 +123,10 @@ Covered by `npm run test:bridge-security`.
 
 ---
 
-## CLI-Level Defenses (Data Layer)
+## Proposed CLI-Level Defenses (Not Implemented)
 
-These are deterministic, require no AI, and run in the extension/bridge.
+These describe a future design, not current extension/bridge behavior. Examples
+in this section are illustrative, not working commands or actual output.
 
 ### Defense 1: Structured Trust Boundaries in Output
 
@@ -181,6 +213,8 @@ Reported in output as:
 ```
 
 ### Defense 4: Read-Only Mode
+
+**Not implemented. Do not rely on the example commands below for protection.**
 
 ```bash
 # Start bridge in read-only mode — all write operations disabled

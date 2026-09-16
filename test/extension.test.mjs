@@ -114,6 +114,7 @@ const ctx = vm.createContext({
   clearTimeout: (t) => { if (t) t.cleared = true; },
 });
 for (const script of manifest.background.scripts) {
+  if (script === "src/access-control.js") ctx.TB_ACCESS_CONFIG = { tag: true };
   const file = join(EXT, script);
   vm.runInContext(readFileSync(file, "utf-8"), ctx, { filename: file });
 }
@@ -235,6 +236,184 @@ calls.query.length = 0;
 await handle("POST", "/messages/search", { headerMessageId: "<abc@host>" });
 test("headerMessageId forwarded to query without brackets", calls.query[0]?.headerMessageId === "abc@host");
 test("junk still excluded by default", calls.query[0]?.junk === false);
+
+// Match beyond the original limit; simulate Thunderbird's native query filters.
+queryHandlers.length = 0;
+queryHandlers.push((q) => ({ messages: [
+  header(20, { tags: [], size: 10 }),
+  header(21, { tags: ["$label1"], size: 100 }),
+  header(22, { tags: ["$label1"], size: 200 }),
+].filter((m) => (!q.tags || Object.entries(q.tags.tags).every(([tag, value]) => m.tags.includes(tag) === value))
+  && (q.size?.min === undefined || m.size >= q.size.min)
+  && (q.size?.max === undefined || m.size <= q.size.max)) }));
+for (const [label, filters, expectedId] of [
+  ["tag", { tag: "$label1" }, 21],
+  ["minimum size", { sizeMin: 100 }, 21],
+  ["maximum size", { sizeMax: 10 }, 20],
+  ["tag and inclusive size range", { tag: "$label1", sizeMin: 100, sizeMax: 100 }, 21],
+]) {
+  const r = await handle("POST", "/messages/search", { ...filters, limit: 1 });
+  test(`${label} applied before limit`, r.messages.length === 1 && r.messages[0].id === expectedId);
+}
+const zeroSize = await handle("POST", "/messages/search", { sizeMax: 0, limit: 1 });
+test("zero maximum size is not ignored", zeroSize.total === 0);
+test("tag is passed to native query", calls.query.some((q) => q.tags?.mode === "all" && q.tags.tags.$label1 === true));
+test("size range is passed to native query", calls.query.some((q) => q.size?.min === 100 && q.size?.max === 100));
+
+// Test the shared collector with Thunderbird-sized pages, not one record per page.
+const previousContinue = messenger.messages.continueList;
+const previousAbort = messenger.messages.abortList;
+const continued = [], aborted = [];
+let pages;
+messenger.messages.continueList = async (id) => {
+  continued.push(id);
+  const page = pages.get(id);
+  if (page instanceof Error) throw page;
+  return page;
+};
+messenger.messages.abortList = async (id) => { aborted.push(id); };
+async function collect(first, following = [], limit = 1, options = {}) {
+  pages = new Map(following);
+  continued.length = 0;
+  aborted.length = 0;
+  return ctx.collectMessages(async () => first, limit, options);
+}
+let pageResult = await collect({ messages: [header(30), header(31)] });
+test("truncation inside final page reports hasMore", pageResult.total === 1 && pageResult.hasMore);
+pageResult = await collect({ messages: [header(30)] });
+test("exact limit on final page reports no more", pageResult.total === 1 && !pageResult.hasMore);
+pageResult = await collect({ messages: [] });
+test("empty result reports no more", pageResult.total === 0 && !pageResult.hasMore);
+pageResult = await collect({ id: "next", messages: [header(30)] }, [["next", { messages: [header(31)] }]]);
+test("lookahead finds a match on next page", pageResult.hasMore && continued.length === 1);
+pageResult = await collect({ id: "next", messages: [header(30)] }, [["next", { messages: [] }]]);
+test("empty trailing page does not imply more results", !pageResult.hasMore);
+pageResult = await collect({ messages: [header(30), header(31, { read: true })] }, [], 1, { unreadOnly: true });
+test("filtered tail does not imply more results", !pageResult.hasMore);
+pageResult = await collect({ id: "next", messages: [header(30)] }, [["next", {
+  id: "last", messages: [header(31, { read: true })],
+}], ["last", { messages: [header(32)] }]], 1, { unreadOnly: true });
+test("lookahead crosses filtered pages", pageResult.hasMore && continued.length === 2);
+pageResult = await collect({ messages: [header(30), header(31), header(32)] }, [], 1, { offset: 1 });
+test("offset skips matches before limit and lookahead", pageResult.messages[0]?.id === 31 && pageResult.offset === 1 && pageResult.hasMore);
+pageResult = await collect({ id: "next", messages: [header(30), header(31)] }, [], 1);
+test("early completion aborts Thunderbird list", pageResult.hasMore && aborted[0] === "next" && continued.length === 0);
+pageResult = await collect({ id: "next", messages: [header(30)] }, [["next", { messages: [header(31)] }]], Infinity);
+test("unbounded callers still collect all pages", pageResult.total === 2 && !pageResult.hasMore);
+let pageError;
+try { await collect({ id: "next", messages: [header(30)] }, [["next", new Error("page failed")]]); }
+catch (e) { pageError = e; }
+test("pagination errors propagate and abort list", pageError?.message === "page failed" && aborted[0] === "next");
+messenger.messages.abortList = async () => { throw new Error("list already gone"); };
+pageError = null;
+try { await collect({ id: "next", messages: [header(30)] }, [["next", new Error("original page error")]]); }
+catch (e) { pageError = e; }
+test("cleanup failure does not hide original error", pageError?.message === "original page error");
+pageError = null;
+try { await collect({ id: "next", messages: [header(30), header(31)] }); }
+catch (e) { pageError = e; }
+test("cleanup failure after success is reported", pageError?.message === "list already gone");
+messenger.messages.abortList = async (id) => { aborted.push(id); };
+
+let invalidQueries = 0;
+for (const [limit, offset] of [[NaN, 0], [-1, 0], [1.5, 0], ["1", 0], [1, -1], [1, NaN], [1, 0.5]]) {
+  let error;
+  try { await ctx.collectMessages(async () => { invalidQueries++; }, limit, { offset }); }
+  catch (e) { error = e; }
+  test(`invalid limit/offset rejected (${limit}/${offset})`, error?.message.startsWith("INVALID_ARGS"));
+}
+test("invalid pagination does not start a Thunderbird query", invalidQueries === 0);
+
+// Compare every small page/limit/offset combination with a plain array oracle.
+// All pages share the same cursor, as in Thunderbird; include empty interim pages.
+let combinations = 0, mismatch = null;
+for (let count = 0; count <= 6; count++) {
+  const source = Array.from({ length: count }, (_, i) => header(i + 1, {
+    read: i % 2 === 0, flagged: i % 3 === 0, folder: folder(i % 2 ? "acct1" : "acct2"),
+  }));
+  for (const pageSize of [1, 2, 3]) {
+    for (const options of [{}, { unreadOnly: true }, { flaggedOnly: true }, { accountId: "acct1" },
+      { unreadOnly: true, flaggedOnly: true, accountId: "acct1" }]) {
+      const matching = source.filter(m => (!options.unreadOnly || !m.read)
+        && (!options.flaggedOnly || m.flagged) && (!options.accountId || m.folder.accountId === options.accountId));
+      for (let offset = 0; offset <= count + 1; offset++) {
+        for (const limit of [0, 1, 2, 3, 7, Infinity]) {
+          const queue = [[]];
+          for (let i = 0; i < source.length; i += pageSize) queue.push(source.slice(i, i + pageSize), []);
+          const next = async () => ({ messages: queue.shift(), id: queue.length ? "cursor" : null });
+          messenger.messages.continueList = next;
+          const r = await ctx.collectMessages(next, limit, { ...options, offset });
+          const expected = matching.slice(offset, offset + limit).map(m => m.id);
+          if (JSON.stringify(r.messages.map(m => m.id)) !== JSON.stringify(expected) ||
+              r.total !== expected.length || r.offset !== offset ||
+              r.hasMore !== (matching.length > offset + limit)) {
+            mismatch = { count, pageSize, options, offset, limit };
+          }
+          combinations++;
+        }
+      }
+    }
+  }
+}
+test(`pagination array oracle (${combinations} combinations)`, mismatch === null, JSON.stringify(mismatch));
+messenger.messages.continueList = previousContinue;
+messenger.messages.abortList = previousAbort;
+
+// Sorted pagination must consider later native pages before offset and limit.
+const previousList = messenger.messages.list;
+const sortedSource = [
+  header(101, { date: date('2026-01-02'), author: 'c', subject: 'z', size: 50, flagged: true }),
+  header(102, { date: date('2026-01-05'), author: 'a', subject: 'b', size: 10, read: true, flagged: true }),
+  header(103, { date: date('2026-01-04'), author: 'd', subject: 'a', size: 80, flagged: true }),
+  header(104, { date: date('2026-01-03'), author: 'b', subject: 'y', size: 90, folder: folder('acct2') }),
+  header(105, { date: date('2026-01-04'), author: 'c', subject: 'b', size: 60, flagged: true }),
+];
+let sortedPages;
+function firstSortedPage() {
+  sortedPages = [sortedSource.slice(0, 2), [], sortedSource.slice(2, 4), sortedSource.slice(4)];
+  return nextSortedPage();
+}
+function nextSortedPage() {
+  const messages = sortedPages.shift();
+  return { messages, id: sortedPages.length ? 'sorted-cursor' : null };
+}
+messenger.messages.list = async () => firstSortedPage();
+messenger.messages.continueList = async () => nextSortedPage();
+messenger.messages.abortList = async () => {};
+let sortedCases = 0, sortedMismatch = null;
+for (const sort of ['date', 'from', 'subject', 'size']) {
+  for (const sortOrder of ['asc', 'desc']) {
+    for (const filters of [{}, { unreadOnly: true, flagged: true }]) {
+      const expected = sortedSource.filter(m => (!filters.unreadOnly || !m.read) && (!filters.flagged || m.flagged));
+      const key = sort === 'from' ? 'author' : sort;
+      const dir = sortOrder === 'asc' ? 1 : -1;
+      expected.sort((a, b) => dir * (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0));
+      for (const offset of [0, 1, 4, 5, 9]) {
+        for (const limit of [0, 1, 2, 5, Infinity]) {
+          const r = await handle('POST', '/messages/list', { folderId: 'inbox', sort, sortOrder, offset, limit, ...filters });
+          const wanted = expected.slice(offset, offset + limit).map(m => m.id);
+          if (JSON.stringify(r.messages.map(m => m.id)) !== JSON.stringify(wanted) ||
+              r.total !== wanted.length || r.offset !== offset || r.hasMore !== (expected.length > offset + limit)) {
+            sortedMismatch = { sort, sortOrder, filters, offset, limit };
+          }
+          sortedCases++;
+        }
+      }
+    }
+  }
+}
+test(`sorted folder pagination across pages (${sortedCases} cases)`, sortedMismatch === null, JSON.stringify(sortedMismatch));
+const savedQueryHandlers = queryHandlers.splice(0);
+queryHandlers.push(() => firstSortedPage());
+const latest = await handle('POST', '/recent', { limit: 1 });
+test('recent chooses newest from all native pages before limiting', latest.messages[0]?.id === 102 && latest.hasMore);
+const unreadLatest = await handle('POST', '/recent', { limit: 2, accountId: 'acct1', unreadOnly: true });
+test('recent filters before sorted pagination and preserves ties',
+  JSON.stringify(unreadLatest.messages.map(m => m.id)) === JSON.stringify([103, 105]) && unreadLatest.hasMore);
+queryHandlers.splice(0, queryHandlers.length, ...savedQueryHandlers);
+messenger.messages.list = previousList;
+messenger.messages.continueList = previousContinue;
+messenger.messages.abortList = previousAbort;
 
 // ─── Read batch / bulk ──────────────────────────────────────────────
 

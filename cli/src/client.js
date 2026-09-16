@@ -78,9 +78,9 @@ export async function api(method, path, body = null, timeout = 30000) {
   }
 
   const data = await res.json();
-  if (res.status >= 400) {
-    const err = new Error(data.error || `HTTP ${res.status}`);
-    err.code = data.code || (res.status === 503 ? "EXTENSION_DISCONNECTED" : "THUNDERBIRD_ERROR");
+  if (res.status >= 400 || data?.error) {
+    const err = new Error(data?.error || `HTTP ${res.status}`);
+    err.code = data?.code || (res.status === 503 ? "EXTENSION_DISCONNECTED" : "THUNDERBIRD_ERROR");
     throw err;
   }
   return data;
@@ -127,6 +127,8 @@ function compactify(data) {
 
 function truncateBody(data, maxChars) {
   if (!maxChars || maxChars <= 0) return data;
+  if (typeof data === "string") return data.length > maxChars ? data.slice(0, maxChars) + "\n...[truncated]" : data;
+  if (Array.isArray(data)) return data.map(item => truncateBody(item, maxChars));
   if (data && typeof data === "object") {
     const result = { ...data };
     if (result.parts && typeof result.parts === "object") {
@@ -135,10 +137,18 @@ function truncateBody(data, maxChars) {
         result.parts.text = result.parts.text.slice(0, maxChars) + "\n...[truncated]";
         result.parts.textTruncated = true;
       }
+      if (typeof result.parts.html === "string" && result.parts.html.length > maxChars) {
+        result.parts.html = result.parts.html.slice(0, maxChars) + "\n...[truncated]";
+        result.parts.htmlTruncated = true;
+      }
     }
     if (typeof result.body === "string" && result.body.length > maxChars) {
       result.body = result.body.slice(0, maxChars) + "\n...[truncated]";
       result.bodyTruncated = true;
+    }
+    if (typeof result.raw === "string" && result.raw.length > maxChars) {
+      result.raw = result.raw.slice(0, maxChars) + "\n...[truncated]";
+      result.rawTruncated = true;
     }
     if (result.messages) result.messages = result.messages.map((m) => truncateBody(m, maxChars));
     return result;

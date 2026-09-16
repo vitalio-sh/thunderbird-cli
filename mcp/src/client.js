@@ -81,10 +81,10 @@ export async function api(method, path, body = null, timeout = 30000) {
   }
 
   const data = await res.json();
-  if (res.status >= 400) {
-    const err = new Error(data.error || `HTTP ${res.status}`);
+  if (res.status >= 400 || data?.error) {
+    const err = new Error(data?.error || `HTTP ${res.status}`);
     err.code =
-      data.code || (res.status === 503 ? "EXTENSION_DISCONNECTED" : "THUNDERBIRD_ERROR");
+      data?.code || (res.status === 503 ? "EXTENSION_DISCONNECTED" : "THUNDERBIRD_ERROR");
     throw err;
   }
   return data;

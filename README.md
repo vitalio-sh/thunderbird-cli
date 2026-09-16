@@ -1,6 +1,22 @@
 # thunderbird-cli
 
-> Give Claude (and other AI agents) full access to your email through Mozilla Thunderbird.
+> Read and search Thunderbird email through a CLI, with optional MCP and configurable action permissions.
+
+## This fork
+
+This fork adds [configurable access rights](docs/ACCESS-CONTROL.md), plus the
+correctness and transport fixes listed in [Unreleased changes](CHANGELOG.md).
+Reading/searching are always available. Attachment downloads and unsent draft
+preparation default to enabled; sending and changes to existing mail default to
+disabled. Copy `access.example.json`, customize it, and build your own add-on.
+Run `tb access` to check what the installed add-on permits. MCP is optional.
+Deletion and emptying Trash are not implemented and cannot be enabled. Use
+the move command with a Trash folder ID to move mail to Trash.
+Upstream signed binaries linked below do not contain this fork's changes.
+
+For one authenticated CLI-only installation, use [local setup](docs/LOCAL-SETUP.md).
+It includes the bridge service, private XPI builder, attachments on new drafts and
+replies, native quotation preservation, sender/recipient selection and draft inspection.
 
 [![tests](https://github.com/vitalio-sh/thunderbird-cli/actions/workflows/test.yml/badge.svg)](https://github.com/vitalio-sh/thunderbird-cli/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -23,10 +39,10 @@ Tested at scale: **22 accounts, 249,000+ messages, 86,000+ unread** — all mana
 - 🔐 **Zero credential exposure** — all IMAP/SMTP stays in Thunderbird
 - 🤖 **Claude Desktop ready** — 12 MCP tools, one-line config
 - 📨 **38 CLI commands** — read, search, compose, reply, bulk ops, folder CRUD, attachments
-- 🛡️ **Safe by default** — compose/reply/forward save as drafts; permanent delete requires `--confirm`
+- 🛡️ **Safe by default** — compose/reply/forward save as drafts; no deletion or empty-Trash capability
 - 🎯 **Token-optimized** — `--fields` selection, `--compact` mode, `--max-body` truncation
 - 🏠 **Localhost-only** — no cloud, no telemetry, nothing leaves your machine
-- ✅ **Thunderbird 128+** — signed and approved on addons.thunderbird.net
+- ✅ **Thunderbird 128+** — build this fork to get its restrictions; upstream signed builds differ
 - 🧪 **80 tests** — 46 CLI/bridge + 34 MCP integration tests
 
 ## Quick Start

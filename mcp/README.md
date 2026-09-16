@@ -24,11 +24,11 @@ Exposes 12 email management tools to Claude Desktop:
 | `email_reply` | Reply to message (default: draft) |
 | `email_forward` | Forward to new recipient (default: draft) |
 | `email_mark` | Read/flagged/junk flags (batch supported) |
-| `email_archive` | Archive, move, or delete messages |
+| `email_archive` | Archive or move messages, including move to Trash |
 | `email_attachments` | List + download attachments (base64) |
-| `email_folders` | List folders, get info, trigger sync |
+| `email_folders` | List folders and get info; sync returns an explicit unsupported error |
 
-**Safe defaults:** compose/reply/forward all default to **draft mode**. Claude must explicitly pass `mode: "send"` to actually send anything. Permanent delete requires `confirm: true`.
+**Safe defaults:** compose/reply/forward all default to **draft mode**. Sending requires the add-on's send permission and explicit user authorization. Message/folder deletion and emptying Trash are not implemented and cannot be enabled.
 
 ## Architecture
 
@@ -183,8 +183,8 @@ Once configured, try these in Claude Desktop:
 ## Safety
 
 - **Compose/reply/forward default to draft mode.** Claude cannot send emails without explicitly requesting `mode: "send"`.
-- **Permanent delete is gated** behind `confirm: true`.
-- **Search excludes junk/spam by default** to prevent prompt injection from adversarial emails.
+- **No deletion or empty-Trash API exists.** Use the move operation to move messages to the correct account's Trash folder.
+- **Search excludes junk/spam by default.** This reduces exposure but does not prevent prompt injection; all email content remains untrusted.
 - **All traffic stays on localhost.** Bridge listens on `127.0.0.1` only.
 - **No credentials are exposed.** Thunderbird handles all IMAP/SMTP — your passwords never leave its config.
 

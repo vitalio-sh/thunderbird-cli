@@ -9,6 +9,8 @@
 
 import { createRequire } from "module";
 import { Command } from "commander";
+import { readFileSync, statSync } from "fs";
+import { basename, resolve } from "path";
 import { api, output, outputError, getConfig, parseRelativeDate } from "./client.js";
 
 const { version } = createRequire(import.meta.url)("../package.json");
@@ -49,8 +51,37 @@ function run(fn) {
   };
 }
 
+function attachmentPayload(paths = []) {
+  let total = 0;
+  return paths.map(raw => {
+    const path = resolve(raw);
+    const stat = statSync(path);
+    total += stat.size;
+    if (!stat.isFile() || total > 25 * 1024 * 1024) {
+      throw new Error("Attachments must be regular files totaling at most 25 MiB");
+    }
+    return { name: basename(path), data: readFileSync(path).toString("base64") };
+  });
+}
+
+function parseMessageId(id) {
+  const value = Number(id.trim());
+  if (!/^\d+$/.test(id.trim()) || !Number.isSafeInteger(value) || value <= 0) {
+    throw Object.assign(new Error("Message IDs must be positive integers"), { code: "INVALID_ARGS" });
+  }
+  return value;
+}
+
 function parseIds(str) {
-  return str.split(",").map(id => parseInt(id.trim()));
+  return str.split(",").map(parseMessageId);
+}
+
+function parseCount(value) {
+  const number = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(number)) {
+    throw Object.assign(new Error("Count must be a nonnegative integer"), { code: "INVALID_ARGS" });
+  }
+  return number;
 }
 
 // ─── Health ───────────────────────────────────────────────────────────
@@ -65,6 +96,14 @@ program
   }));
 
 // ─── Bridge Status ────────────────────────────────────────────────────
+
+program
+  .command("access")
+  .description("Show the access policy enforced by the installed Thunderbird add-on")
+  .action(run(async () => {
+    const g = program.opts();
+    output(await api("GET", "/access", null, getTimeout(g)), g.format, getOutputOpts(g));
+  }));
 
 program
   .command("bridge-status")
@@ -167,23 +206,6 @@ program
     const g = program.opts();
     const data = await api("POST", "/folders/rename", { folderId, newName }, getTimeout(g));
     output(data, g.format, getOutputOpts(g));
-  }));
-
-// ─── Folder Delete ────────────────────────────────────────────────────
-
-program
-  .command("folder-delete <folderId>")
-  .description("Delete a folder")
-  .option("--confirm", "required to confirm deletion")
-  .action(run(async (folderId, opts) => {
-    const g = program.opts();
-    const fmt = g.format;
-    if (!opts.confirm) {
-      outputError({ message: "Use --confirm to delete", code: "INVALID_ARGS" }, fmt);
-      return;
-    }
-    const data = await api("POST", "/folders/delete", { folderId }, getTimeout(g));
-    output(data, fmt, getOutputOpts(g));
   }));
 
 // ─── Stats ────────────────────────────────────────────────────────────
@@ -392,28 +414,6 @@ program
     output(data, g.format, getOutputOpts(g));
   }));
 
-// ─── Delete ───────────────────────────────────────────────────────────
-
-program
-  .command("delete <messageIds>")
-  .description("Delete message(s) (to trash)")
-  .option("--permanent", "permanently delete (skip trash)")
-  .option("--confirm", "required for permanent delete")
-  .action(run(async (messageIds, opts) => {
-    const g = program.opts();
-    const fmt = g.format;
-    if (opts.permanent && !opts.confirm) {
-      outputError({ message: "Use --confirm for permanent delete", code: "INVALID_ARGS" }, fmt);
-      return;
-    }
-    const ids = parseIds(messageIds);
-    const data = await api("POST", "/messages/delete", {
-      messageIds: ids,
-      permanent: opts.permanent || false,
-    }, getTimeout(g));
-    output(data, fmt, getOutputOpts(g));
-  }));
-
 // ─── Archive ──────────────────────────────────────────────────────────
 
 program
@@ -492,7 +492,7 @@ program
       if (!tags.includes(tag)) tags.push(tag);
     }
     const data = await api("POST", "/messages/update", {
-      messageId: parseInt(messageId),
+      messageId: parseMessageId(messageId),
       tags,
     }, timeout);
     output(data, g.format, getOutputOpts(g));
@@ -520,6 +520,7 @@ program
   .option("--subject <text>", "subject line")
   .option("--body <text>", "message body")
   .option("--body-file <path>", "read body from file")
+  .option("--attach <path>", "attach local file (repeatable)", (v, p) => [...p, v], [])
   .option("--html", "body is HTML")
   .option("--from <identityId>", "send from specific identity")
   .option("--priority <level>", "priority: highest|high|normal|low|lowest")
@@ -539,6 +540,7 @@ program
       to: opts.to,
       subject: opts.subject || "",
       body,
+      attachments: attachmentPayload(opts.attach),
       isHTML: opts.html || false,
     };
     if (opts.cc) payload.cc = opts.cc;
@@ -567,6 +569,9 @@ program
   .description("Reply to a message")
   .option("--body <text>", "reply text")
   .option("--body-file <path>", "read reply from file")
+  .option("--to <address>", "override recipients and clear Cc/Bcc")
+  .option("--from <identityId>", "use a Thunderbird sender identity")
+  .option("--attach <path>", "attach local file (repeatable)", (v, p) => [...p, v], [])
   .option("--all", "reply to all")
   .option("--html", "body is HTML")
   .option("--draft", "save as draft (default)")
@@ -581,10 +586,14 @@ program
     }
 
     const payload = {
-      messageId: parseInt(messageId),
+      messageId: parseMessageId(messageId),
       body,
       replyAll: opts.all || false,
+      isHTML: opts.html || false,
+      attachments: attachmentPayload(opts.attach),
     };
+    if (opts.to) payload.to = opts.to.split(",").map(s => s.trim());
+    if (opts.from) payload.identityId = opts.from;
 
     if (opts.send) {
       payload.send = true;
@@ -600,6 +609,13 @@ program
 
 // ─── Forward ──────────────────────────────────────────────────────────
 
+program.command("inspect-compose <tabId>")
+  .description("Inspect an unsent composer, reply linkage and attachments")
+  .action(run(async tabId => {
+    const g = program.opts();
+    output(await api("GET", `/compose/${parseCount(tabId)}`, null, getTimeout(g)), g.format, getOutputOpts(g));
+  }));
+
 program
   .command("forward <messageId>")
   .description("Forward a message")
@@ -611,7 +627,7 @@ program
   .action(run(async (messageId, opts) => {
     const g = program.opts();
     const payload = {
-      messageId: parseInt(messageId),
+      messageId: parseMessageId(messageId),
       to: opts.to,
       body: opts.body || "",
     };
@@ -659,9 +675,13 @@ program
       mkdirSync(dir, { recursive: true });
       const results = [];
       for (const att of attachments) {
+        const name = att.name || att.partName;
+        if (!name || name === "." || name === ".." || /[\\/\x00-\x1f]/.test(name)) {
+          throw Object.assign(new Error("Unsafe attachment filename"), { code: "INVALID_ARGS" });
+        }
         const data = await api("POST", `/messages/${messageId}/attachment`, { partName: att.partName }, timeout);
-        const filePath = join(dir, att.name || att.partName);
-        writeFileSync(filePath, Buffer.from(data.data, "base64"));
+        const filePath = join(dir, name);
+        writeFileSync(filePath, Buffer.from(data.data, "base64"), { flag: "wx", mode: 0o600 });
         results.push({ partName: att.partName, name: att.name, path: filePath });
       }
       output(results, g.format, getOutputOpts(g));
@@ -672,7 +692,7 @@ program
       }
       const data = await api("POST", `/messages/${messageId}/attachment`, { partName }, timeout);
       if (opts.output) {
-        writeFileSync(opts.output, Buffer.from(data.data, "base64"));
+        writeFileSync(opts.output, Buffer.from(data.data, "base64"), { flag: "wx", mode: 0o600 });
         output({ saved: opts.output, size: data.size }, g.format, getOutputOpts(g));
       } else {
         output(data, g.format, getOutputOpts(g));
@@ -691,7 +711,7 @@ program
     const g = program.opts();
     const body = {};
     if (messageId) {
-      body.messageId = parseInt(messageId);
+      body.messageId = parseMessageId(messageId);
     } else if (opts.folder) {
       body.folderId = opts.folder;
       if (opts.limit) body.limit = parseInt(opts.limit);
@@ -763,7 +783,7 @@ program
 
 program
   .command("sync [folderId]")
-  .description("Trigger folder sync")
+  .description("Unsupported: use Thunderbird's Get Messages command")
   .option("--all", "sync all folders")
   .action(run(async (folderId, opts) => {
     const g = program.opts();
@@ -781,7 +801,7 @@ program
 
 program
   .command("sync-status <folderId>")
-  .description("Check sync status of a folder")
+  .description("Read current folder counts (not IMAP sync progress)")
   .action(run(async (folderId) => {
     const g = program.opts();
     const data = await api("POST", "/sync/status", { folderId }, getTimeout(g));
@@ -826,22 +846,16 @@ bulk
     const timeout = getTimeout(g);
     const list = await api("POST", "/messages/list", {
       folderId: fromFolderId,
-      limit: parseInt(opts.limit),
+      limit: parseCount(opts.limit),
+      ...(opts.olderThan !== undefined ? { olderThan: parseCount(opts.olderThan) } : {}),
+      ...(opts.from ? { from: opts.from } : {}),
+      ...(opts.subject ? { subjectPattern: opts.subject } : {}),
     }, timeout);
 
-    let toMove = list.messages || list;
-    if (opts.olderThan) {
-      const cutoff = new Date(Date.now() - parseInt(opts.olderThan) * 86400000);
-      toMove = toMove.filter(m => new Date(m.date) < cutoff);
+    if (list.bulkFiltersApplied !== true) {
+      throw new Error("The installed extension does not confirm bulk filtering. Update the extension before moving messages.");
     }
-    if (opts.from) {
-      const addr = opts.from.toLowerCase();
-      toMove = toMove.filter(m => (m.author || "").toLowerCase().includes(addr));
-    }
-    if (opts.subject) {
-      const pat = new RegExp(opts.subject, "i");
-      toMove = toMove.filter(m => pat.test(m.subject || ""));
-    }
+    const toMove = list.messages || list;
 
     if (toMove.length > 0) {
       const ids = toMove.map(m => m.id);
@@ -855,32 +869,6 @@ bulk
   }));
 
 bulk
-  .command("delete <folderId>")
-  .description("Bulk delete messages in folder")
-  .option("--older-than <days>", "only messages older than N days")
-  .option("--from <address>", "filter by sender")
-  .option("--subject <pattern>", "filter by subject")
-  .option("--confirm", "required to confirm deletion")
-  .option("-l, --limit <n>", "batch size", "100")
-  .action(run(async (folderId, opts) => {
-    const g = program.opts();
-    const fmt = g.format;
-    if (!opts.confirm) {
-      outputError({ message: "Use --confirm for bulk delete", code: "INVALID_ARGS" }, fmt);
-      return;
-    }
-    const timeout = getTimeout(g);
-    const body = { folderId };
-    if (opts.olderThan) body.olderThan = parseInt(opts.olderThan);
-    if (opts.from) body.from = opts.from;
-    if (opts.subject) body.subject = opts.subject;
-    if (opts.limit) body.limit = parseInt(opts.limit);
-
-    const data = await api("POST", "/bulk/delete", body, timeout);
-    output(data, fmt, getOutputOpts(g));
-  }));
-
-bulk
   .command("tag <folderId> <tagKey>")
   .description("Bulk tag messages in folder")
   .option("--older-than <days>", "only messages older than N days")
@@ -891,10 +879,10 @@ bulk
     const g = program.opts();
     const timeout = getTimeout(g);
     const body = { folderId, tagKey };
-    if (opts.olderThan) body.olderThan = parseInt(opts.olderThan);
+    if (opts.olderThan !== undefined) body.olderThan = parseCount(opts.olderThan);
     if (opts.from) body.from = opts.from;
     if (opts.subject) body.subject = opts.subject;
-    if (opts.limit) body.limit = parseInt(opts.limit);
+    if (opts.limit !== undefined) body.limit = parseCount(opts.limit);
 
     const data = await api("POST", "/bulk/tag", body, timeout);
     output(data, g.format, getOutputOpts(g));

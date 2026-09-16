@@ -32,7 +32,7 @@ tb mark <messageId> --read
 tb mark <id1,id2,id3> --flagged      # batch mark
 tb move <messageId> <folderId>
 tb archive <messageId>
-tb delete <messageId>
+tb move <messageId> <trashFolderId>  # move to Trash, never delete
 
 # Tags
 tb tag <messageId> $label1            # add tag
@@ -55,12 +55,10 @@ tb attachment-download <messageId> --all --output-dir ./downloads
 tb folders <accountId>
 tb folder-info <folderId>
 tb folder-create <parentId> "NewFolder"
-tb folder-delete <folderId> --confirm
 
 # Bulk operations
 tb bulk mark-read <folderId>
 tb bulk move <from> <to> --older-than 90
-tb bulk delete <folderId> --confirm --older-than 365
 tb bulk tag <folderId> $label2 --from "noreply@"
 
 # Sync & fetch
@@ -93,10 +91,10 @@ tb stats --compact                               # strip nulls
 - **Folder IDs** look like `account1://INBOX` — get via `tb folders <accountId>`
 - **Identity IDs** look like `id1` — get via `tb identities`, use with `--from`
 - **Compose defaults to draft** — use `--send` to send immediately, `--open` to open in Thunderbird
-- **Destructive operations** (`delete --permanent`, `folder-delete`, `bulk delete`) require `--confirm`
+- **Deletion and emptying Trash** are not implemented and cannot be enabled
 - **Search excludes junk** by default — use `--include-junk` to override
 - **Relative dates** work in `--since`/`--until`: `7d`, `2w`, `3m`, `1y`, `today`, `yesterday`
-- **Batch operations** — `mark`, `move`, `copy`, `delete`, `archive` all accept comma-separated IDs
+- **Batch operations** — `mark`, `move`, `copy`, `archive` all accept comma-separated IDs
 - **Timeout** — SMTP send operations may need `--timeout 60000` (60s)
 - All email credentials stay in Thunderbird — nothing leaves the machine
 

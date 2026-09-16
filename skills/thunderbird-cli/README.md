@@ -66,7 +66,7 @@ Full setup: <https://github.com/vitalio-sh/thunderbird-cli/blob/main/docs/SETUP.
 
 - Token-efficient field selection (`fields=["id","author","subject","date"]` cuts a search response by ~15×)
 - Draft-by-default safety on `email_compose` / `email_reply` / `email_forward`
-- Explicit `confirm: true` gate for permanent delete, folder delete, and bulk delete
+- No message/folder deletion or empty-Trash capability; move-to-Trash uses the move operation
 - Trust metadata interpretation (junk score, SPF/DKIM, contact status)
 - Prompt-injection defense — treating message bodies as untrusted input
 - Recipes for the seven most common email workflows (stats, search, read, reply, compose, attachment download, bulk archive)

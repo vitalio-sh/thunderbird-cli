@@ -1,6 +1,9 @@
 node_modules/
 .DS_Store
 cli/config.json
+access.local.json
+local-runtime/
+extension/src/bridge-auth.js
 
 # Build output — exclude dist/ except for signed releases
 dist/*

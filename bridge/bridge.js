@@ -28,6 +28,14 @@ import { isIP } from "net";
 import { WebSocketServer } from "ws";
 import { randomUUID, timingSafeEqual } from "crypto";
 
+for (let i = 2; i < process.argv.length; i += 2) {
+  if (!["--port", "--ws-port"].includes(process.argv[i]) || !/^\d+$/.test(process.argv[i + 1] || "") ||
+      Number(process.argv[i + 1]) < 1 || Number(process.argv[i + 1]) > 65535) {
+    console.error("[bridge] Supported arguments: --port <1-65535> --ws-port <1-65535>. --read-only is not implemented.");
+    process.exit(1);
+  }
+}
+
 const HTTP_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--port") || "7700");
 const WS_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--ws-port") || "7701");
 const DEFAULT_TIMEOUT = parseInt(process.env.TB_BRIDGE_TIMEOUT || "120000");
@@ -125,11 +133,22 @@ const wss = new WebSocketServer({
       console.error(`[bridge] Rejected WebSocket connection from web origin ${req.headers.origin}`);
       return false;
     }
-    return true;
+    let token;
+    try {
+      token = new URL(req.url, "http://localhost").searchParams.get("token");
+    } catch {
+      return false;
+    }
+    return isAuthorized({ headers: { authorization: `Bearer ${token || ""}` } });
   },
 });
 
 wss.on("connection", (ws) => {
+  ws.on("error", (err) => console.error("[bridge] Extension socket error:", err.message));
+  if (extensionSocket) {
+    ws.close(1008, "An extension is already connected");
+    return;
+  }
   console.log("[bridge] Extension connected");
   extensionSocket = ws;
   ws.isAlive = true;
@@ -157,7 +176,14 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     console.log("[bridge] Extension disconnected");
-    if (extensionSocket === ws) extensionSocket = null;
+    if (extensionSocket === ws) {
+      extensionSocket = null;
+      for (const p of pending.values()) {
+        clearTimeout(p.timer);
+        p.reject({ message: "Thunderbird extension not connected; request outcome is unknown. Inspect drafts before retrying." });
+      }
+      pending.clear();
+    }
   });
 });
 
@@ -263,8 +289,27 @@ const httpServer = createServer(async (req, res) => {
   }
 
   // Read body
-  let body = "";
-  for await (const chunk of req) body += chunk;
+  const chunks = [];
+  let bytes = 0;
+  try {
+    for await (const chunk of req) {
+      bytes += chunk.length;
+      if (bytes > 40 * 1024 * 1024) {
+        res.writeHead(413);
+        res.end(JSON.stringify({ error: "Request exceeds 40 MiB" }));
+        return;
+      }
+      chunks.push(chunk);
+    }
+  } catch {
+    if (!res.destroyed) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "Incomplete request body" }));
+    }
+    return;
+  }
+  // A UTF-8 character may span network chunks; decode only after collecting bytes.
+  const body = Buffer.concat(chunks, bytes).toString("utf8");
 
   let parsedBody = null;
   if (body.trim()) {
@@ -291,9 +336,9 @@ const httpServer = createServer(async (req, res) => {
     res.writeHead(200);
     res.end(JSON.stringify(result));
   } catch (err) {
-    const status = err.message?.includes("not connected") ? 503 : 500;
+    const status = err.code === "FORBIDDEN" ? 403 : err.message?.includes("not connected") ? 503 : 500;
     res.writeHead(status);
-    res.end(JSON.stringify({ error: err.message || "Unknown error" }));
+    res.end(JSON.stringify({ error: err.message || "Unknown error", code: err.code }));
   }
 });
 

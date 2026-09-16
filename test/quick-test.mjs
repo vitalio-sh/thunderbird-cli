@@ -21,7 +21,6 @@ function handle({ method, path, body }) {
   if (path === "/folders/info") return { id: body?.folderId, name: "Inbox", type: "inbox", unreadMessageCount: 5, totalMessageCount: 50 };
   if (path === "/folders/create") return { success: true, folder: { id: "fn", name: body?.name } };
   if (path === "/folders/rename") return { success: true, folder: { id: body?.folderId, name: body?.newName } };
-  if (path === "/folders/delete") return { success: true };
   if (path === "/messages/search") return { messages: [{ id: 1, subject: "Test", author: "a@b.com", date: "2026-04-01", read: false, flagged: false, junk: false, size: 100, tags: [], folder: { accountId: "acct1", path: "/Inbox" } }], total: 1 };
   if (path === "/messages/list") return { messages: [{ id: 1, subject: "Test", author: "a@b.com", date: "2026-04-01", read: false, flagged: false, junk: false, size: 100, tags: ["$l1"], folder: { accountId: "acct1", path: "/Inbox" } }], total: 1 };
   if (path === "/messages/read-batch") return (body?.messageIds || []).map(id => ({ id, subject: "T", parts: { text: "Hello" } }));
@@ -29,7 +28,6 @@ function handle({ method, path, body }) {
   if (path === "/messages/archive") return { success: true, archived: (body?.messageIds || []).length };
   if (path === "/messages/move") return { success: true, moved: (body?.messageIds || []).length };
   if (path === "/messages/copy") return { success: true, copied: (body?.messageIds || []).length };
-  if (path === "/messages/delete") return { success: true, deleted: (body?.messageIds || []).length };
   if (path === "/messages/update") return { success: true };
   if (path?.match(/\/raw$/)) return { raw: "From: a@b\nSubject: T\n\nBody" };
   if (path?.match(/\/headers$/)) return { id: 1, subject: "T", author: "a@b" };
@@ -52,7 +50,6 @@ function handle({ method, path, body }) {
   if (path?.match(/^\/contacts\/[^/]+$/)) return { id: "c1", properties: { DisplayName: "John" } };
   if (path === "/sync") return { success: true, synced: body?.all ? "all" : body?.folderId };
   if (path === "/sync/status") return { folderId: body?.folderId, totalMessages: 50, unread: 5 };
-  if (path === "/bulk/delete") return { success: true, deleted: 3 };
   if (path === "/bulk/tag") return { success: true, tagged: 5 };
   if (path === "/bulk/fetch") return { success: true, fetched: 10, total: 10 };
   return { error: `Not found: ${method} ${path}` };
@@ -136,7 +133,6 @@ console.log("\n\x1b[1mFolders\x1b[0m");
 test("POST /folders/info", await httpCall("POST", "/folders/info", { folderId: "f1" }), r => r.name === "Inbox");
 test("POST /folders/create", await httpCall("POST", "/folders/create", { parentFolderId: "f1", name: "New" }), r => r.success);
 test("POST /folders/rename", await httpCall("POST", "/folders/rename", { folderId: "f1", newName: "X" }), r => r.success);
-test("POST /folders/delete", await httpCall("POST", "/folders/delete", { folderId: "f1" }), r => r.success);
 
 console.log("\n\x1b[1mSearch & List\x1b[0m");
 test("POST /messages/search", await httpCall("POST", "/messages/search", { query: "test", limit: 25 }), r => r.messages?.length >= 0);
@@ -157,7 +153,6 @@ test("POST /messages/read-batch", await httpCall("POST", "/messages/read-batch",
 console.log("\n\x1b[1mActions\x1b[0m");
 test("POST /messages/move", await httpCall("POST", "/messages/move", { messageIds: [1], destinationFolderId: "f2" }), r => r.success);
 test("POST /messages/copy", await httpCall("POST", "/messages/copy", { messageIds: [1], destinationFolderId: "f2" }), r => r.success);
-test("POST /messages/delete", await httpCall("POST", "/messages/delete", { messageIds: [1] }), r => r.success);
 test("POST /messages/archive", await httpCall("POST", "/messages/archive", { messageIds: [1, 2] }), r => r.success && r.archived === 2);
 test("POST /messages/update", await httpCall("POST", "/messages/update", { messageId: 1, read: true }), r => r.success);
 test("POST /messages/fetch", await httpCall("POST", "/messages/fetch", { messageId: 1 }), r => r.downloaded);
@@ -188,7 +183,6 @@ test("POST /sync", await httpCall("POST", "/sync", { all: true }), r => r.succes
 test("POST /sync/status", await httpCall("POST", "/sync/status", { folderId: "f1" }), r => r.totalMessages);
 
 console.log("\n\x1b[1mBulk\x1b[0m");
-test("POST /bulk/delete", await httpCall("POST", "/bulk/delete", { folderId: "f1" }), r => r.success);
 test("POST /bulk/tag", await httpCall("POST", "/bulk/tag", { folderId: "f1", tagKey: "$l1" }), r => r.success);
 test("POST /bulk/fetch", await httpCall("POST", "/bulk/fetch", { folderId: "f1" }), r => r.success);
 

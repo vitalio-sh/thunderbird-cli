@@ -90,7 +90,7 @@ Email is an open channel. The CLI must:
 
 - Strip technically hidden content (HTML comments, white-on-white, zero-width chars)
 - Never auto-send messages — `compose/reply/forward` default to draft
-- Require `--confirm` for destructive operations (`delete --permanent`, `bulk delete`, `folder-delete`)
+- Do not add deletion/empty-Trash commands, API calls or permissions. Use the move API for moving mail to Trash.
 - Exclude junk from search results by default
 
 See [SECURITY.md](SECURITY.md) for the full threat model.

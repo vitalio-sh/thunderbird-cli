@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- All message/folder deletion commands, MCP deletion operations, API handlers and deletion permissions. No config can enable them. Use explicit move-to-Trash instead; old deletion configuration keys fail validation.
+- Bundled older upstream signed XPIs with full-access deletion code; build this fork rather than installing those stale artifacts.
+
+### Added
+- Consolidated authenticated local installation: shared HTTP/WebSocket token, generated user service, private XPI builds with stable output and preserved add-on identity, repeatable compose/reply attachments, reply sender/recipient selection, and composer inspection. Plain reply input retains native HTML/plain quotation format. Native decoding validates attachments up to the 25 MiB limit without a recursive regex.
+- Add-on-enforced JSON access policy shared by CLI and optional MCP: always-on reading/searching, switchable attachment downloads (on by default), draft preparation, and separately gated sending/mailbox operations. XPI builds validate settings and derive native permissions; `tb access` reports the installed policy. Existing installed or signed upstream add-ons are unchanged.
+
+### Fixed
+- Malformed WebSocket handshake URLs are rejected without crashing the bridge.
+- Download checks report actual attachment presence, use Thunderbird's native `headersOnly` flag after retrieval, and propagate native failures instead of misclassifying empty or attachment-only messages.
+- Folder listings and statistics skip unsupported count requests for account-root containers while still reporting genuine child-folder count failures.
+- CLI `--body-only` output now obeys `--max-body`.
+- Attachment downloads reject unsafe filenames and refuse overwrites; XPI builds no longer produce world-writable files.
+- MCP validates tool arguments, preserves zero-valued search limits/size bounds, and reports handler errors as tool failures. HTTP clients also reject error payloads returned with status 200.
+- Body limits cover HTML, raw messages, and CLI batch results. Native attachment listing includes text/HTML files without appending their contents to the message body.
+- Thread lookup consumes all native query pages and surfaces query failures.
+- Replies preserve Thunderbird's generated quotation and honor CLI `--html`; new messages use native priority and custom-header fields.
+- Bulk move/delete/tag filters run before the limit; already-tagged messages do not consume a tagging batch. Invalid message IDs and operation flags fail explicitly.
+- Bridge preserves split UTF-8 input, survives interrupted uploads, prevents replacement of an active extension socket, and fails pending requests on disconnect.
+- `sync` no longer reports success without syncing. Folder counts use `getFolderInfo`. Documentation now distinguishes implemented protections from proposed security features; unsupported bridge options fail at startup.
+- Bundled skill examples now match real MCP arguments and stop claiming nonexistent sanitization, trust scores, and bulk-archive commands. Bulk move fails closed with older extensions that cannot confirm filtering support.
+- Folder listings and recent-message queries sort all matching headers before applying pagination, including across Thunderbird result pages.
+- Search tag and size filters are applied by Thunderbird before the result limit, so matching messages beyond the first unfiltered batch are not missed.
+- Limited message collection checks for an additional matching message before reporting `hasMore`, including when truncating within the final page, and aborts unfinished message lists. Invalid pagination arguments fail before starting a query.
+
 ## [1.1.0] — 2026-09-14
 
 npm packages `thunderbird-cli`, `thunderbird-cli-bridge`, `thunderbird-cli-mcp` 1.1.0; Thunderbird extension 2.1.0.

@@ -25,10 +25,18 @@ Everything localhost-only. Thunderbird holds credentials; no creds pass through 
 
 ## Setup (before editing)
 
+### Fork workflow
+
+This fork (`reinhardullrich/thunderbird-cli`) uses only `main`. Keep reviewed,
+tested changes on `main` and push to `origin/main` when authorized. Do not create
+feature branches on this fork. The `upstream` remote is reference-only unless
+an upstream contribution is explicitly requested. Never commit local credentials,
+access configuration, runtime files, or the private token-bearing XPI.
+
 ```bash
 npm install                # installs workspace deps for cli/, bridge/, mcp/
-npm test                   # 46 CLI/bridge integration tests
-npm run test:mcp           # 34 MCP server tests
+npm test                   # CLI/mock integration and review regression tests
+npm run test:mcp           # MCP server integration and argument validation
 npm run bridge             # start bridge (needed for live tests; not for unit tests)
 ```
 
@@ -41,7 +49,7 @@ Node 20+ required. All three packages are ES modules (`"type": "module"`).
 - **ES modules** throughout, `"type": "module"` in every `package.json`.
 - **CLI framework:** `commander.js`. Command definitions in `cli/src/cli.js`; HTTP client + formatters in `cli/src/client.js`.
 - **Bridge:** vanilla Node `http` + `ws`. Zero business logic — it's a UUID-correlated proxy. Don't add state.
-- **MCP server:** `@modelcontextprotocol/sdk`. Stdio transport. Reuses `cli/src/client.js` — don't re-implement the HTTP client in `mcp/`.
+- **MCP server:** `@modelcontextprotocol/sdk`. Stdio transport. The separately published package has its own `mcp/src/client.js`; keep HTTP behavior consistent with `cli/src/client.js`.
 - **Extension:** pure WebExtension (`manifest_version: 2`). No Experiment APIs. Compatible with Thunderbird 128+.
 
 ### Output format
@@ -59,22 +67,21 @@ Error codes: `BRIDGE_UNREACHABLE`, `EXTENSION_DISCONNECTED`, `AUTH_REQUIRED`, `F
 
 These are defaults the end-user agent relies on. Don't flip them:
 
-- `email_search` excludes junk unless `include_junk: true` is explicit
+- `email_search` excludes junk unless `includeJunk: true` is explicit
 - `email_compose` / `email_reply` / `email_forward` default to `mode: "draft"`
-- `email_archive operation=delete` requires `permanent=true` AND `confirm=true` for permanent deletion
-- CLI bulk ops (`tb bulk delete`, `tb folder-delete`) require `--confirm`
+- Never implement message/folder/attachment deletion or emptying Trash. Never
+  request `messagesDelete`. No configuration may enable these capabilities.
+- Use the existing move operation for placing mail in Trash; never emulate it
+  with a delete API, even with a non-permanent flag.
 
 See `SECURITY.md` for the full threat model.
 
 ### Token efficiency
 
-The MCP + CLI both support:
-
-- `fields` (MCP) / `--fields` (CLI): comma-separated allowlist of keys in the response
-- `compact` (MCP) / `--compact` (CLI): strip `null` values
-- `max_body` (MCP) / `--max-body` (CLI): truncate message bodies
-
-If you add a new tool or command that returns structured data, support these three options. They're the difference between an agent fitting 50 results in context vs. 5.
+The CLI supports `--fields`, `--compact`, and `--max-body`. MCP `email_read`
+supports `maxBody`; there are no global MCP `fields` or `compact` arguments.
+Consult the actual tool input schemas; do not document planned options as
+implemented. Preserve available output caps when changing response handling.
 
 ### Commit style
 
@@ -93,6 +100,13 @@ Scopes: `cli`, `bridge`, `mcp`, `extension`, `docker`, `meta`, `release`.
 All four `package.json` files (`package.json`, `cli/package.json`, `bridge/package.json`, `mcp/package.json`) move together. `server.json` (for the MCP Registry) must match the package version. Update `CHANGELOG.md` in the same commit.
 
 ## Tests before pushing
+
+Access checks belong in `extension/src/access-control.js`, before any native
+API calls. Classify new routes there and add a regression to
+`test/access-control.test.mjs`. Reading and searching are always available;
+never add switches for them. Attachment exports are separately configurable.
+The default policy allows downloads and drafts, but not sending or mailbox
+changes. Policy documentation is in `docs/ACCESS-CONTROL.md`.
 
 ```bash
 npm test && npm run test:mcp

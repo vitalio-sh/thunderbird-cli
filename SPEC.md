@@ -1,5 +1,13 @@
 # thunderbird-cli — Technical Specification
 
+> Design document, not a guarantee that every proposed feature is implemented.
+> Use `docs/COMMANDS.md` for current command behavior and `SECURITY.md`'s
+> implementation-status section for actual security boundaries.
+
+This fork's implemented add-on access policy is specified in
+[`docs/ACCESS-CONTROL.md`](docs/ACCESS-CONTROL.md). It applies equally to CLI and
+optional MCP and overrides any broader proposed capabilities below.
+
 ## Overview
 
 `thunderbird-cli` (`tb`) is a low-level CLI tool that provides complete programmatic access to Mozilla Thunderbird's email capabilities. It serves as a bridge between AI agents and Thunderbird, making Thunderbird the source of truth for all email operations while allowing visual control through the Thunderbird desktop client.
@@ -160,8 +168,6 @@ tb folder-create <parentFolderId> <name>
 # Rename folder
 tb folder-rename <folderId> <newName>
 
-# Delete folder
-tb folder-delete <folderId>
 ```
 
 ### 4. Messages — Listing
@@ -258,7 +264,10 @@ Emails have wildly different formats. The CLI must normalize them:
 
 #### Download State Detection
 
-IMAP accounts may have headers-only or partially downloaded messages.
+Both status commands verify retrieval without decrypting, then read Thunderbird's
+native `headersOnly` flag. Empty and attachment-only messages can be `full`;
+`hasBody` means not headers-only, not nonempty or decrypted text. Retrieval errors
+are propagated. Checks may fetch mail and do not prove permanent offline caching.
 
 ```bash
 tb read <messageId> --check-download
@@ -267,11 +276,10 @@ tb read <messageId> --check-download
   "ok": true,
   "data": {
     "id": 42,
-    "downloadState": "full",     // "full" | "headers_only" | "partial"
+    "downloadState": "full",     // "full" | "headers_only"
     "size": 15234,
     "hasBody": true,
-    "hasAttachments": true,
-    "attachmentCount": 2
+    "hasAttachments": true
   }
 }
 
@@ -346,12 +354,8 @@ tb move <id1,id2,id3> <destinationFolderId>
 tb copy <messageId> <destinationFolderId>
 tb copy <id1,id2,id3> <destinationFolderId>
 
-# Delete (to trash)
-tb delete <messageId>
-tb delete <id1,id2,id3>
-
-# Permanent delete (skip trash) — requires --confirm flag
-tb delete <messageId> --permanent --confirm
+# Move to Trash (never calls the delete API)
+tb move <messageId> <trashFolderId>
 
 # Archive
 tb archive <messageId>
@@ -471,12 +475,6 @@ tb bulk move <sourceFolderId> <destFolderId> [options]
   --from <address>         # filter by sender
   --subject <pattern>      # filter by subject (substring match)
   --limit <n>
-
-# Bulk delete
-tb bulk delete <folderId> [options]
-  --older-than <days>
-  --from <address>
-  --confirm                # required for delete operations
 
 # Bulk tag
 tb bulk tag <folderId> <tagKey> [options]
@@ -612,7 +610,7 @@ Timeout: 30 seconds. Configurable via `--timeout <ms>` flag on CLI.
 | List folders | `messenger.accounts.get(id, true)` | ✅ Implemented |
 | Create folder | `messenger.folders.create()` | ✅ Implemented |
 | Rename folder | `messenger.folders.rename()` | ✅ Implemented |
-| Delete folder | `messenger.folders.delete()` | ✅ Implemented |
+| Delete folder | Not exposed | Removed; cannot be enabled |
 | Folder info | `messenger.folders.getFolderInfo()` | ✅ Implemented |
 
 | Search messages | `messenger.messages.query()` | ✅ Implemented |
@@ -621,7 +619,7 @@ Timeout: 30 seconds. Configurable via `--timeout <ms>` flag on CLI.
 | Raw message | `messenger.messages.getRaw()` | ✅ Implemented |
 | Move messages | `messenger.messages.move()` | ✅ Implemented |
 | Copy messages | `messenger.messages.copy()` | ✅ Implemented |
-| Delete messages | `messenger.messages.delete()` | ✅ Implemented |
+| Delete messages / empty Trash | Not exposed | Removed; cannot be enabled |
 | Update flags | `messenger.messages.update()` | ✅ Implemented |
 | Tags | `messenger.messages.listTags()` | ✅ Implemented |
 | Create tag | `messenger.messages.createTag()` | ✅ Implemented |
@@ -730,12 +728,12 @@ Note: Extension development cannot happen in Docker. Edit `extension/src/backgro
 - [ ] Junk message warnings in output
 - [x] Download state detection (`tb download-status`)
 - [x] `tb fetch` (force download from IMAP)
-- [x] `tb sync` / `tb sync-status` (trigger IMAP refresh)
+- [x] `tb sync-status` reads folder counts; `tb sync` fails explicitly because IMAP refresh is not implemented
 - [x] Batch read (`tb read-batch`)
 - [x] `--max-body` truncation
 - [x] `--fields` flag for field filtering
 - [x] Search excludes junk by default (`--include-junk` to override)
-- [x] Folder CRUD (create, rename, delete)
+- [x] Folder listing, creation and rename; deletion deliberately absent
 - [x] Tag create
 - [x] Attachment listing and download
 - [x] Archive command
@@ -755,7 +753,7 @@ Note: Extension development cannot happen in Docker. Edit `extension/src/backgro
 ### Phase 4: Bulk Operations
 - [x] `tb bulk mark-read`
 - [x] `tb bulk move` with filters (--older-than, --from, --subject)
-- [x] `tb bulk delete` with --confirm guard
+- [x] No deletion or empty-Trash API exposed
 - [x] `tb bulk tag`
 - [x] `tb bulk fetch`
 - [ ] Progress output for long-running bulk operations
@@ -783,7 +781,7 @@ Thunderbird syncs IMAP in the background, but:
 ### Sync Commands
 
 ```bash
-# Check sync status for a folder
+# Read current folder counts (not IMAP sync progress)
 tb sync-status <folderId>
 # Returns:
 {
@@ -791,19 +789,15 @@ tb sync-status <folderId>
   "data": {
     "folderId": "account1://INBOX",
     "totalMessages": 1520,
-    "downloadedFull": 1480,
-    "headersOnly": 40,
-    "syncState": "idle",           # "idle" | "syncing" | "error"
-    "lastSync": "2026-04-04T12:00:00Z"
+    "unread": 40,
+    "name": "Inbox"
   }
 }
 
-# Trigger folder refresh (forces Thunderbird to check for new mail)
+# Unsupported: returns an error directing the user to Thunderbird's Get Messages
 tb sync <folderId>
-# Implementation: calls messenger.folders.getFolderInfo() which
-# triggers IMAP NOOP/SELECT, then returns updated counts
 
-# Sync all accounts (trigger global check)
+# Also unsupported
 tb sync --all
 
 # Check if a specific message is fully downloaded
@@ -813,11 +807,10 @@ tb download-status <messageId>
 # Force download full message from IMAP server
 tb fetch <messageId>
 # Implementation: messenger.messages.getRaw() forces full download
-# Then the message is cached in Thunderbird permanently
+# This is not a guarantee of permanent offline caching
 
 # Batch fetch — download full bodies for folder
-tb fetch --folder <folderId> --headers-only --limit 100
-# Only fetches messages that are currently headers-only
+tb fetch --folder <folderId> --limit 100
 ```
 
 ### How Sync Detection Works Internally
@@ -826,9 +819,9 @@ tb fetch --folder <folderId> --headers-only --limit 100
    If it returns body parts → fully downloaded. 
    If body is empty/null → headers only.
    
-2. **Trigger sync**: `messenger.folders.getSubFolders()` on a folder 
-   triggers Thunderbird's internal IMAP check. Also, 
-   `messenger.messages.list()` on a folder forces a refresh.
+2. **Sync limitation**: `messenger.folders.getSubFolders()` enumerates folders;
+   it does not trigger an IMAP refresh. Neither message enumeration nor folder
+   counts guarantee fresh server state. Use Thunderbird's Get Messages command.
 
 3. **New mail detection**: Poll `tb recent --hours 1` periodically,
    or compare message counts between calls.
@@ -982,8 +975,6 @@ Dangerous operations require explicit confirmation:
 ```bash
 # These commands include a safety warning in output:
 tb compose --send          # Warning: "About to send email. Verify recipient and content."
-tb delete --permanent      # Warning: "Permanent deletion cannot be undone."
-tb bulk delete             # Requires --confirm flag
 tb forward                 # Warning: "Forwarding may expose original content to new recipient."
 ```
 
@@ -1035,7 +1026,9 @@ The MCP server:
 
 ### Tool Catalog
 
-The 12 MCP tools are **curated** for AI agent use cases. Bulk admin operations (folder CRUD, identity management, bulk delete, etc.) are intentionally excluded — they belong in the CLI for explicit human control.
+The 12 MCP tools are **curated** for AI agent use cases. Bulk admin operations
+such as bulk move/tag belong in the CLI for explicit human control. Deletion
+and emptying Trash are absent from every interface.
 
 | MCP Tool | Maps to CLI commands |
 |----------|---------------------|
@@ -1048,7 +1041,7 @@ The 12 MCP tools are **curated** for AI agent use cases. Bulk admin operations (
 | `email_reply` | `tb reply` |
 | `email_forward` | `tb forward` |
 | `email_mark` | `tb mark` (batch) |
-| `email_archive` | `tb archive`, `tb move`, `tb delete` (consolidated) |
+| `email_archive` | `tb archive`, `tb move` (including move to Trash) |
 | `email_attachments` | `tb attachments`, `tb attachment-download` |
 | `email_folders` | `tb folders`, `tb folder-info`, `tb sync` (consolidated) |
 
@@ -1058,7 +1051,7 @@ The 12 MCP tools are **curated** for AI agent use cases. Bulk admin operations (
 |---|---|---|
 | Audience | Humans + scripts | AI agents |
 | Discovery | `tb --help` | Tool descriptions in LLM context |
-| Bulk admin ops | Yes (`bulk delete`, `tag-create`, etc.) | No — too risky for autonomous use |
+| Bulk admin ops | Yes (`bulk move`, `tag-create`, etc.) | No — too risky for autonomous use |
 | Folder CRUD | Yes | No — destructive |
 | Identity management | Yes | No — admin operation |
 | Cost per added tool | Negligible | Tokens in every conversation |

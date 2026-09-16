@@ -21,6 +21,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -30,6 +31,9 @@ import { createRequire } from "module";
 
 import { api } from "./client.js";
 import { tools } from "./tools.js";
+
+const validator = new AjvJsonSchemaValidator();
+const validateArgs = new Map(tools.map(tool => [tool.name, validator.getValidator(tool.inputSchema)]));
 
 const { version } = createRequire(import.meta.url)("../package.json");
 
@@ -71,9 +75,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
+    const validation = validateArgs.get(name)(args || {});
+    if (!validation.valid) {
+      throw Object.assign(new Error(`Invalid arguments: ${validation.errorMessage}`), { code: "INVALID_ARGS" });
+    }
     const result = await tool.handler(args || {}, api);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      isError: !!result?.error,
     };
   } catch (err) {
     return {

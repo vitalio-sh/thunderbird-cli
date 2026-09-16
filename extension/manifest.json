@@ -12,22 +12,14 @@
   },
   "permissions": [
     "accountsRead",
-    "accountsIdentities",
     "addressBooks",
     "compose",
     "compose.save",
-    "compose.send",
     "messagesRead",
-    "messagesMove",
-    "messagesDelete",
-    "messagesUpdate",
-    "messagesTags",
-    "messagesImport",
-    "accountsFolders",
     "idle",
     "tabs"
   ],
   "background": {
-    "scripts": ["src/thread-utils.js", "src/background.js"]
+    "scripts": ["src/access-config.js", "src/access-control.js", "src/thread-utils.js", "src/background.js"]
   }
 }

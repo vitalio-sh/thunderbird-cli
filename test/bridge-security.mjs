@@ -81,8 +81,14 @@ function http(method, path, { headers = {}, body } = {}) {
       });
     });
     req.on("error", reject);
-    if (body !== undefined) req.write(body);
-    req.end();
+    if (Array.isArray(body)) {
+      // Force separate chunks, including a split UTF-8 character.
+      req.write(body[0]);
+      setTimeout(() => req.end(body[1]), 75);
+    } else {
+      if (body !== undefined) req.write(body);
+      req.end();
+    }
   });
 }
 
@@ -94,7 +100,7 @@ function connectExtension(options = {}) {
     ws.on("message", (d) => {
       const msg = JSON.parse(d.toString());
       received.push(msg);
-      ws.send(JSON.stringify({ id: msg.id, result: { echoed: msg.path } }));
+      ws.send(JSON.stringify({ id: msg.id, result: { echoed: msg.path, body: msg.body } }));
     });
     ws.on("open", () => resolve({ state: "open", ws, received }));
     ws.on("unexpected-response", () => resolve({ state: "rejected", ws, received }));
@@ -175,6 +181,41 @@ await withBridge({}, async () => {
 });
 
 // ─── WebSocket heartbeat ────────────────────────────────────────────
+
+await withBridge({}, async () => {
+  const ext = await connectExtension();
+  const text = JSON.stringify({ body: 'Gr\u00fc\u00dfe' });
+  const bytes = Buffer.from(text), split = bytes.indexOf(Buffer.from('\u00fc')) + 1;
+  const r = await http('POST', '/compose', { body: [bytes.subarray(0, split), bytes.subarray(split)] });
+  test('split UTF-8 is preserved across network chunks', r.json?.body?.body, 'Gr\u00fc\u00dfe');
+  const secondCode = await new Promise(resolve => {
+    const second = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
+    second.on('error', () => {});
+    const timer = setTimeout(() => { second.terminate(); resolve(0); }, 1000);
+    second.on('close', code => { clearTimeout(timer); resolve(code); });
+  });
+  test('second socket cannot replace active extension', secondCode, 1008);
+  const before = ext.received.length;
+  await http('POST', '/messages/search', { body: '{}' });
+  test('original socket still owns subsequent requests', ext.received.length, before + 1);
+  ext.ws.removeAllListeners('message');
+  const pending = http('POST', '/reply', { body: '{}', headers: { 'X-TB-Timeout': '1000' } });
+  await sleep(50);
+  ext.ws.close();
+  const disconnected = await pending;
+  test('disconnect rejects pending request without fake success', disconnected.status, 503);
+  test('disconnect warns against blindly retrying drafts', disconnected.json.error.includes('outcome is unknown'), true);
+});
+
+await withBridge({}, async () => {
+  await new Promise(resolve => {
+    const req = request({ host: '127.0.0.1', port: PORT, path: '/compose', method: 'POST', headers: { 'Content-Length': '10000' } });
+    req.on('error', () => {}); req.on('close', resolve);
+    req.write('{'); setTimeout(() => req.destroy(), 50);
+  });
+  await sleep(100);
+  test('aborted HTTP upload does not crash bridge', (await http('GET', '/bridge/status')).status, 200);
+});
 
 console.log("\n\x1b[1mHeartbeat\x1b[0m");
 await withBridge({ TB_BRIDGE_WS_HEARTBEAT_MS: "150" }, async () => {

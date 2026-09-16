@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$ROOT/local-runtime/bridge.env"
+export TB_AUTH_TOKEN
+exec node "$ROOT/cli/src/cli.js" "$@"

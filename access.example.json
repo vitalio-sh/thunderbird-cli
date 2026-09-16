@@ -1,0 +1,13 @@
+{
+  "downloadAttachments": true,
+  "compose": true,
+  "send": false,
+  "move": false,
+  "copy": false,
+  "archive": false,
+  "mark": false,
+  "tag": false,
+  "tagCreate": false,
+  "folderCreate": false,
+  "folderRename": false
+}

@@ -11,15 +11,36 @@
  */
 
 import AdmZip from "adm-zip";
-import { readFileSync, mkdirSync, existsSync, statSync } from "fs";
-import { join, dirname, relative } from "path";
+import { readFileSync, writeFileSync, chmodSync, mkdirSync, existsSync, statSync } from "fs";
+import { join, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import { readdirSync } from "fs";
+import { parseArgs } from "node:util";
+import vm from "node:vm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
 const EXT_DIR = join(REPO_ROOT, "extension");
 const DIST_DIR = join(REPO_ROOT, "dist");
+
+const { values } = parseArgs({ options: {
+  "access-config": { type: "string" }, "auth-file": { type: "string" },
+  "addon-id": { type: "string" }, "addon-version": { type: "string" },
+  output: { type: "string" },
+} });
+let token = "";
+if (values["auth-file"]) {
+  const match = readFileSync(values["auth-file"], "utf8").match(/^TB_AUTH_TOKEN=([a-f0-9]{64})\n$/);
+  if (!match) throw new Error("Invalid auth file; expected one generated TB_AUTH_TOKEN entry");
+  token = match[1];
+}
+const policyContext = vm.createContext({});
+vm.runInContext(readFileSync(join(EXT_DIR, "src/access-config.js"), "utf8"), policyContext);
+if (values["access-config"]) {
+  policyContext.TB_ACCESS_CONFIG = JSON.parse(readFileSync(values["access-config"], "utf8"));
+}
+vm.runInContext(readFileSync(join(EXT_DIR, "src/access-control.js"), "utf8"), policyContext);
+const policy = vm.runInContext("ACCESS_POLICY", policyContext);
 
 // ─── Load manifest ─────────────────────────────────────────────────
 
@@ -30,6 +51,10 @@ if (!existsSync(manifestPath)) {
 }
 
 const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+if (values["addon-id"]) manifest.browser_specific_settings.gecko.id = values["addon-id"];
+if (values["addon-version"]) manifest.version = values["addon-version"];
+manifest.background.scripts.unshift("src/bridge-auth.js");
+manifest.permissions = vm.runInContext("accessPermissions(ACCESS_POLICY)", policyContext);
 const { name, version } = manifest;
 
 if (!name || !version) {
@@ -38,6 +63,7 @@ if (!name || !version) {
 }
 
 console.log(`Building ${name} v${version}`);
+console.log(`  access policy:    ${JSON.stringify(policy)}`);
 console.log(`  manifest_version: ${manifest.manifest_version}`);
 console.log(
   `  min Thunderbird:  ${manifest.browser_specific_settings?.gecko?.strict_min_version || "unknown"}`
@@ -46,7 +72,7 @@ console.log(`  permissions:      ${(manifest.permissions || []).length} listed`)
 
 // ─── Collect files ─────────────────────────────────────────────────
 
-const EXCLUDE = new Set([".DS_Store", "node_modules", ".git", "package.json", "package-lock.json"]);
+const EXCLUDE = new Set([".DS_Store", "node_modules", ".git", "package.json", "package-lock.json", "bridge-auth.js"]);
 
 function walk(dir, base = "") {
   const results = [];
@@ -81,19 +107,27 @@ if (!files.some((f) => f.rel === "manifest.json")) {
 
 if (!existsSync(DIST_DIR)) mkdirSync(DIST_DIR, { recursive: true });
 
-const xpiName = `thunderbird-cli-${version}.xpi`;
-const xpiPath = join(DIST_DIR, xpiName);
+const xpiName = values.output ? basename(values.output) : `thunderbird-cli-${version}.xpi`;
+const xpiPath = values.output || join(DIST_DIR, xpiName);
+mkdirSync(dirname(xpiPath), { recursive: true });
 
 const zip = new AdmZip();
+zip.addFile("src/bridge-auth.js", Buffer.from(`globalThis.TB_BRIDGE_TOKEN = ${JSON.stringify(token)};\n`));
 for (const f of files) {
-  const data = readFileSync(f.path);
+  let data = readFileSync(f.path);
+  if (f.rel === "manifest.json") data = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
+  if (f.rel === "src/access-config.js") {
+    data = Buffer.from(`globalThis.TB_ACCESS_CONFIG = Object.freeze(${JSON.stringify(policy)});\n`);
+  }
   // Use forward-slash path separators (ZIP standard)
   const zipPath = f.rel.replace(/\\/g, "/");
   // Place files at the ZIP root (no leading directory)
   zip.addFile(zipPath, data);
 }
 
-zip.writeZip(xpiPath);
+// AdmZip.writeZip chmods the result to 0666, overriding the caller's umask.
+writeFileSync(xpiPath, zip.toBuffer(), { mode: 0o600 });
+chmodSync(xpiPath, 0o600);
 
 const finalSize = statSync(xpiPath).size;
 console.log(`\n✓ Built ${xpiName}`);
@@ -130,6 +164,5 @@ console.log(`✓ manifest.json round-trip OK (version: ${version})`);
 console.log(`\nNext steps:`);
 console.log(`  1. Install locally for testing:`);
 console.log(`     Thunderbird → Add-ons → ⚙️  → Install Add-on From File → ${xpiName}`);
-console.log(`  2. Submit to ATN for signing:`);
-console.log(`     https://addons.thunderbird.net/developers/addon/submit/`);
-console.log(`     Choose: "On your own" (self-distributed)`);
+if (token) console.log("  Private authenticated build: never publish or share this XPI.");
+else console.log("  Public build: submit to https://addons.thunderbird.net/developers/addon/submit/");
