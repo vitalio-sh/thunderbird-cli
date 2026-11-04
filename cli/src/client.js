@@ -46,10 +46,44 @@ const config = loadConfig();
 const BASE_URL = `http://${config.host}:${config.port}`;
 
 /**
+ * Callers build paths by splicing in message and account IDs. That is only safe
+ * while an ID cannot escape its own segment — fetch() resolves `.` and `..`
+ * before the request leaves, so `/messages/1/../../compose` would arrive at the
+ * bridge as `/compose`, a route the caller never asked for.
+ *
+ * The URL parser also treats `\` as a separator and decodes `%2e` to `.`, so
+ * both forms are checked.
+ */
+function assertSafePath(path) {
+  const p = String(path);
+  if (!p.startsWith("/")) {
+    throw Object.assign(new Error(`Request path must be absolute: ${p}`), {
+      code: "INVALID_ARGS",
+    });
+  }
+  let decoded = p;
+  try {
+    decoded = decodeURIComponent(p);
+  } catch {
+    // Malformed escape — the raw form is still checked below.
+  }
+  for (const form of new Set([p, decoded])) {
+    const segments = form.split(/[?#]/)[0].split(/[/\\]/);
+    if (segments.some((s) => s === "." || s === "..")) {
+      throw Object.assign(
+        new Error(`Request path must not contain relative segments: ${p}`),
+        { code: "INVALID_ARGS" }
+      );
+    }
+  }
+  return p;
+}
+
+/**
  * Make API call to bridge
  */
 export async function api(method, path, body = null, timeout = 30000) {
-  const url = `${BASE_URL}${path}`;
+  const url = `${BASE_URL}${assertSafePath(path)}`;
   const headers = { "Content-Type": "application/json" };
   if (config.authToken) headers["Authorization"] = `Bearer ${config.authToken}`;
   // Tell the bridge how long it should wait for Thunderbird before giving up.
