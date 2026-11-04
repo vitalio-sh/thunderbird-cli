@@ -209,6 +209,39 @@ await withBridge({ TB_BRIDGE_WS_TAKEOVER_MS: "200" }, async () => {
   fresh.ws.close();
 });
 
+// ─── In-flight requests fail fast on disconnect ─────────────────────
+
+console.log("\n\x1b[1mIn-flight requests\x1b[0m");
+await withBridge({}, async () => {
+  const held = await connectExtension();
+  // A holder dropping mid-flight fails the request now, not after the full timeout.
+  held.ws.removeAllListeners("message");
+  const started = Date.now();
+  const inflight = http("POST", "/messages/search", { body: "{}" });
+  await sleep(150);
+  held.ws.close();
+  const dropped = await inflight;
+  test("in-flight request fails when the holder drops", dropped.status, 503);
+  test("the failure carries EXTENSION_DISCONNECTED", dropped.json?.code, "EXTENSION_DISCONNECTED");
+  test("it fails fast", Date.now() - started < 5000, true);
+});
+
+// ─── HTTP: resource limits ──────────────────────────────────────────
+
+console.log("\n\x1b[1mResource limits\x1b[0m");
+await withBridge({ TB_BRIDGE_MAX_BODY: "1024" }, async () => {
+  const huge = await new Promise((resolve) => {
+    const req = request({ host: "127.0.0.1", port: PORT, method: "POST", path: "/messages/search" }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode));
+    });
+    // The bridge answers 413 and then drops the socket, so the upload side may error.
+    req.on("error", () => {});
+    req.end("x".repeat(64 * 1024));
+  });
+  test("oversized request body → 413", huge, 413);
+});
+
 // ─── WebSocket heartbeat ────────────────────────────────────────────
 
 console.log("\n\x1b[1mHeartbeat\x1b[0m");
