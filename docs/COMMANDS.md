@@ -154,8 +154,9 @@ tb compose [options]
   --body <text>            # message body (inline)
   --body-file <path>       # read body from file
   --html                   # treat body as HTML
-  --from <identityId>      # send from specific identity (see: tb identities)
+  --from <identity>        # sender: identity email address or ID (see: tb identities)
   --priority <level>       # highest | high | normal | low | lowest
+  --attach <name>          # file NAME from the attachments folder (repeatable)
   --draft                  # save as draft (default)
   --open                   # open in Thunderbird compose window
   --send                   # send immediately
@@ -164,13 +165,29 @@ tb reply <messageId> [options]
   --body <text>            # reply text
   --body-file <path>       # read from file
   --all                    # reply to all
+  --html                   # body is HTML (keeps the quoted original)
+  --attach <name>          # repeatable
   --draft / --open / --send
 
 tb forward <messageId> [options]
   --to <address>           # required
   --body <text>            # additional text
+  --attach <name>          # repeatable; the forwarded message stays attached
   --draft / --open / --send
 ```
+
+### Sending attachments (safe folder)
+
+Files can only be attached from **one folder**: `TB_ATTACH_DIR`, default `~/thunderbird-cli-attachments`.
+Put the files you want to send there, then pass their **names** (not paths):
+
+```bash
+tb attachable                                       # list files available to attach
+tb compose --to a@example.org --body "Report attached" --attach report.pdf
+```
+
+Paths, `..`, dotfiles, symlinks and subfolders are refused, so an agent cannot attach anything
+else on the drive (e.g. `~/.ssh/id_rsa`). Max 20 files, 25 MiB in total.
 
 ## Attachments
 

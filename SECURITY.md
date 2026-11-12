@@ -487,6 +487,7 @@ implemented; agent patterns are guidance for the calling agent, not code.
 | WS slot protection | Bridge | A new connection replaces the extension only if it fails a ping probe; the heartbeat evicts dead sockets | Local process hijacking the extension slot | shipped |
 | Request-path guard | CLI + MCP | Rejects IDs that escape their path segment | Agent-supplied ID reaching an unintended bridge route | shipped |
 | Attachment name sanitizing | CLI | Keeps the last path segment of sender-controlled filenames | Path traversal in `attachment-download --all` | shipped |
+| Outgoing attachment folder | CLI + MCP | Attachments only by file name from `TB_ATTACH_DIR`; paths, dotfiles, symlinks refused | Prompt-injected agent attaching arbitrary local files (exfiltration) | shipped |
 | Resource limits | Bridge | Caps request body and `X-TB-Timeout` | Local caller exhausting the daemon | shipped |
 | Read-only mode | Bridge | Disables all writes | Any write-based attack | planned |
 | Rate limiting | Bridge | Throttles write ops | Mass exfiltration/deletion | planned |

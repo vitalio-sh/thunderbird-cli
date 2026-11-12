@@ -22,7 +22,7 @@
  *   TB_BRIDGE_WS_TAKEOVER_MS  how long a connected extension has to answer a ping before a new
  *                             connection may replace it (default: 2000)
  *   TB_BRIDGE_MAX_TIMEOUT     ceiling for the X-TB-Timeout override in ms (default: 600000)
- *   TB_BRIDGE_MAX_BODY        max HTTP request body in bytes (default: 10485760)
+ *   TB_BRIDGE_MAX_BODY        max HTTP request body in bytes (default: 41943040; fits 25 MiB of attachments)
  *
  * Per-request override: HTTP clients can pass `X-TB-Timeout: <ms>` header.
  */
@@ -48,7 +48,7 @@ const DEFAULT_TIMEOUT = parseInt(process.env.TB_BRIDGE_TIMEOUT || "120000");
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.TB_BRIDGE_WS_HEARTBEAT_MS || "30000");
 const TAKEOVER_PROBE_MS = parseInt(process.env.TB_BRIDGE_WS_TAKEOVER_MS || "2000");
 const MAX_TIMEOUT = parseInt(process.env.TB_BRIDGE_MAX_TIMEOUT || "600000");
-const MAX_BODY_BYTES = parseInt(process.env.TB_BRIDGE_MAX_BODY || String(10 * 1024 * 1024));
+const MAX_BODY_BYTES = parseInt(process.env.TB_BRIDGE_MAX_BODY || String(40 * 1024 * 1024)); // 25 MiB attachments, base64
 const CORS_ALLOWED_ORIGINS = new Set(
   (process.env.TB_BRIDGE_CORS_ORIGINS || `http://127.0.0.1:${HTTP_PORT},http://localhost:${HTTP_PORT}`)
     .split(",")

@@ -11,6 +11,7 @@
  */
 
 import { parseRelativeDate } from "./client.js";
+import { attachDir, listAttachable, loadAttachments } from "./attachments.js";
 
 /**
  * `inputSchema` documents the argument types but nothing enforces them — the
@@ -301,6 +302,13 @@ export const tools = [
           type: "string",
           enum: ["highest", "high", "normal", "low", "lowest"],
         },
+        attachments: {
+          type: "array",
+          maxItems: 20,
+          items: { type: "string", pattern: "^[^./\\\\][^/\\\\]*$" },
+          description:
+            "File NAMES (not paths) from the user's attachments folder (TB_ATTACH_DIR, default ~/thunderbird-cli-attachments). Use email_attachments operation 'available' to see them. Only files the user placed there can be attached; never ask for other paths.",
+        },
         mode: {
           type: "string",
           enum: ["draft", "open", "send"],
@@ -321,6 +329,8 @@ export const tools = [
       if (args.bcc) payload.bcc = args.bcc;
       if (args.from) payload.identityId = args.from;
       if (args.priority) payload.priority = args.priority;
+      const attachments = loadAttachments(args.attachments);
+      if (attachments) payload.attachments = attachments;
       const mode = args.mode || "draft";
       if (mode === "send") payload.send = true;
       else if (mode === "open") payload.open = true;
@@ -340,6 +350,13 @@ export const tools = [
         messageId: { type: "integer", minimum: 1, description: "Message ID to reply to" },
         body: { type: "string", description: "Reply body" },
         replyAll: { type: "boolean", description: "Reply to all recipients" },
+        attachments: {
+          type: "array",
+          maxItems: 20,
+          items: { type: "string", pattern: "^[^./\\\\][^/\\\\]*$" },
+          description:
+            "File NAMES (not paths) from the user's attachments folder (TB_ATTACH_DIR, default ~/thunderbird-cli-attachments). Use email_attachments operation 'available' to see them. Only files the user placed there can be attached; never ask for other paths.",
+        },
         mode: {
           type: "string",
           enum: ["draft", "open", "send"],
@@ -354,6 +371,8 @@ export const tools = [
         body: args.body,
         replyAll: args.replyAll || false,
       };
+      const attachments = loadAttachments(args.attachments);
+      if (attachments) payload.attachments = attachments;
       const mode = args.mode || "draft";
       if (mode === "send") payload.send = true;
       else if (mode === "open") payload.open = true;
@@ -373,6 +392,13 @@ export const tools = [
         messageId: { type: "integer", minimum: 1, description: "Message ID to forward" },
         to: { type: "string", description: "Recipient address" },
         body: { type: "string", description: "Optional additional text" },
+        attachments: {
+          type: "array",
+          maxItems: 20,
+          items: { type: "string", pattern: "^[^./\\\\][^/\\\\]*$" },
+          description:
+            "File NAMES (not paths) from the user's attachments folder (TB_ATTACH_DIR, default ~/thunderbird-cli-attachments). Use email_attachments operation 'available' to see them. Only files the user placed there can be attached; never ask for other paths.",
+        },
         mode: {
           type: "string",
           enum: ["draft", "open", "send"],
@@ -387,6 +413,8 @@ export const tools = [
         to: args.to,
         body: args.body || "",
       };
+      const attachments = loadAttachments(args.attachments);
+      if (attachments) payload.attachments = attachments;
       const mode = args.mode || "draft";
       if (mode === "send") payload.send = true;
       else if (mode === "open") payload.open = true;
@@ -518,24 +546,27 @@ export const tools = [
   {
     name: "email_attachments",
     description:
-      "List or download attachments from a message. Operation 'list' returns attachment metadata. Operation 'download' returns base64-encoded file data (use partName from list results).",
+      "Attachments. 'list' returns a message's attachment metadata; 'download' returns base64 file data (partName from list). 'available' lists the files in the user's attachments folder that email_compose/reply/forward can attach (by name).",
     inputSchema: {
       type: "object",
       properties: {
         messageId: { type: "integer", minimum: 1, description: "Message ID" },
         operation: {
           type: "string",
-          enum: ["list", "download"],
-          description: "list metadata or download a specific attachment",
+          enum: ["list", "download", "available"],
+          description: "list / download a message's attachments, or 'available' outgoing files",
         },
         partName: {
           type: "string",
           description: "Required for download — get from list operation",
         },
       },
-      required: ["messageId", "operation"],
+      required: ["operation"],
     },
     handler: async (args, api) => {
+      if (args.operation === "available") {
+        return { folder: attachDir(), files: listAttachable() };
+      }
       if (args.operation === "list") {
         return await api("GET", `/messages/${msgId(args.messageId)}/attachments`);
       }

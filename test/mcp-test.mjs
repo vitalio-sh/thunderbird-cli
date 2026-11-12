@@ -20,6 +20,7 @@ const PORT = 19800;
 const WS_PORT = 19801;
 
 const updates = [];
+const composeBodies = [];
 let passed = 0,
   failed = 0;
 const failures = [];
@@ -118,8 +119,10 @@ function handle({ method, path, body }) {
   if (path === "/messages/delete") return { success: true, deleted: (body?.messageIds || []).length };
   if (path === "/messages/archive") return { success: true, archived: (body?.messageIds || []).length };
   if (path === "/messages/update") { updates.push(body); return { success: true }; }
-  if (path === "/compose")
+  if (path === "/compose") {
+    composeBodies.push(body);
     return { success: true, action: body?.send ? "sent" : body?.open ? "draft_opened" : "draft_saved" };
+  }
   if (path === "/reply") return { success: true, action: body?.send ? "sent" : "draft_saved" };
   if (path === "/forward") return { success: true, action: body?.send ? "sent" : "draft_saved" };
   if (path === "/stats")
@@ -300,7 +303,17 @@ function test(name, result, check) {
 const servers = await startBridge();
 await new Promise((r) => setTimeout(r, 300));
 
+const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } = await import("fs");
+const { tmpdir } = await import("os");
+const ATTACH_HOME = mkdtempSync(join(tmpdir(), "tb-mcp-attach-"));
+const ATTACH_DIR = join(ATTACH_HOME, "outbox");
+mkdirSync(ATTACH_DIR);
+writeFileSync(join(ATTACH_DIR, "invoice.pdf"), "%PDF test");
+writeFileSync(join(ATTACH_DIR, ".env"), "SECRET=1");
+writeFileSync(join(ATTACH_HOME, "private.txt"), "private");
+symlinkSync(join(ATTACH_HOME, "private.txt"), join(ATTACH_DIR, "private-link.txt"));
 const client = new McpClient(MCP_SERVER, {
+  TB_ATTACH_DIR: ATTACH_DIR,
   TB_BRIDGE_HOST: "127.0.0.1",
   TB_BRIDGE_PORT: String(PORT),
 });
@@ -581,6 +594,28 @@ test(
   (r) => (r.parts?.htmlTruncated === true && r.parts.html.startsWith("<p>\n...[truncated]"))
 );
 
+console.log("\n\x1b[1mOutgoing attachments (safe folder)\x1b[0m");
+test(
+  "available lists only regular, visible files in the folder",
+  await client.callTool("email_attachments", { operation: "available" }),
+  (r) => JSON.stringify(r.files?.map((f) => f.name)) === '["invoice.pdf"]'
+);
+test(
+  "compose attaches a folder file by name",
+  await client.callTool("email_compose", { to: "a@b.c", body: "see attached", attachments: ["invoice.pdf"] }),
+  (r) => r.success && composeBodies.at(-1)?.attachments?.[0]?.name === "invoice.pdf" &&
+    Buffer.from(composeBodies.at(-1).attachments[0].data, "base64").toString() === "%PDF test"
+);
+for (const [label, name] of [["an absolute path", join(ATTACH_HOME, "private.txt")], ["parent traversal", "../private.txt"],
+  ["a dotfile", ".env"], ["a symlink", "private-link.txt"], ["home-relative path", "~/.ssh/id_rsa"]]) {
+  const before = composeBodies.length;
+  test(
+    `rejects ${label}`,
+    await client.callTool("email_compose", { to: "a@b.c", body: "x", attachments: [name] }),
+    (r) => !!r.error && composeBodies.length === before
+  );
+}
+
 // Summary
 console.log(`\n\x1b[1m${"─".repeat(40)}\x1b[0m`);
 console.log(
@@ -594,6 +629,7 @@ if (failures.length > 0) {
 }
 
 client.close();
+rmSync(ATTACH_HOME, { recursive: true, force: true });
 servers.mock.close();
 servers.wss.close();
 servers.httpServer.close();

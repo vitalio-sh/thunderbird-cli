@@ -517,7 +517,9 @@ async function handleRequest({ method, path, body }) {
     const { to, cc, bcc, subject, body: msgBody, isHTML = false,
             identityId, send = false, draft = false, open = false,
             priority } = body;
+    const attachmentFiles = decodeAttachments(body.attachments);
     const details = {};
+    if (attachmentFiles.length) details.attachments = attachmentFiles.map((file) => ({ file }));
     if (to) details.to = Array.isArray(to) ? to : [to];
     if (cc) details.cc = Array.isArray(cc) ? cc : [cc];
     if (bcc) details.bcc = Array.isArray(bcc) ? bcc : [bcc];
@@ -548,6 +550,7 @@ async function handleRequest({ method, path, body }) {
     if (!Number.isSafeInteger(messageId) || typeof replyBody !== "string") {
       throw invalidArgs("positive messageId and string body required");
     }
+    const replyFiles = decodeAttachments(body.attachments); // validate before opening a tab
     const type = replyAll ? "replyToAll" : "replyToSender";
     // Open the native reply first so Thunderbird builds the quotation, then prepend our text.
     // Passing a body to beginReply replaces the whole body and drops the quote.
@@ -574,6 +577,7 @@ async function handleRequest({ method, path, body }) {
           plainTextBody: replyBody + "\n\n" + (original.plainTextBody || ""),
         });
       }
+      for (const file of replyFiles) await messenger.compose.addAttachment(tab.id, { file });
     } catch (error) {
       throw new Error(`Reply tab ${tab.id} is open but preparation failed; inspect it before retrying: ${error.message}`);
     }
@@ -595,10 +599,13 @@ async function handleRequest({ method, path, body }) {
   if (path === "/forward" && method === "POST") {
     const { messageId, to, body: fwdBody,
             send = false, draft = false, open = false } = body;
+    const forwardFiles = decodeAttachments(body.attachments); // validate before opening a tab
     const tab = await messenger.compose.beginForward(
       messageId, "forwardAsAttachment",
       { to: Array.isArray(to) ? to : [to], isPlainText: true, plainTextBody: fwdBody || "" }
     );
+    // Added after beginForward so the forwarded message itself stays attached.
+    for (const file of forwardFiles) await messenger.compose.addAttachment(tab.id, { file });
     if (send) {
       await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
       return { success: true, action: "sent" };
@@ -809,6 +816,36 @@ async function resolveIdentityId(value) {
     throw Object.assign(new Error(`No sender identity with address ${value}. List identities with \`tb identities\` or email_stats.`), { code: "NOT_FOUND" });
   }
   throw invalidArgs(`address ${value} belongs to several identities (${matches.map((i) => i.id).join(", ")}); pass the identity ID`);
+}
+
+/**
+ * Outgoing attachments from the CLI/MCP: [{ name, contentType, data (base64) }] → File[].
+ * The clients only read files from the user's attachments folder; this re-checks shape and size.
+ */
+const MAX_OUTGOING_ATTACHMENTS = 20;
+const MAX_OUTGOING_BYTES = 25 * 1024 * 1024;
+function decodeAttachments(list) {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list) || list.length > MAX_OUTGOING_ATTACHMENTS) {
+    throw invalidArgs(`attachments must be a list of at most ${MAX_OUTGOING_ATTACHMENTS} files`);
+  }
+  let total = 0;
+  return list.map((item) => {
+    const { name, contentType, data } = item || {};
+    if (typeof name !== "string" || !name || name.length > 255 || /[\/\\\x00-\x1f\x7f]/.test(name) ||
+        typeof data !== "string" || data.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(data)) {
+      throw invalidArgs("invalid attachment (needs a plain file name and base64 data)");
+    }
+    total += Math.floor(data.length / 4) * 3;
+    if (total > MAX_OUTGOING_BYTES + 2) throw invalidArgs("attachments exceed 25 MiB in total");
+    let binary;
+    try { binary = atob(data); } catch { throw invalidArgs(`attachment ${name}: invalid base64`); }
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const type = typeof contentType === "string" && /^[\w.+-]+\/[\w.+-]+$/.test(contentType)
+      ? contentType : "application/octet-stream";
+    return new File([bytes], name, { type });
+  });
 }
 
 function formatMessage(msg) {

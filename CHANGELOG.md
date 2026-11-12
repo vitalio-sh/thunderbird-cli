@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Outgoing attachments for compose, reply and forward (#23), with a safe folder flow: files are attached **by name** from one folder (`TB_ATTACH_DIR`, default `~/thunderbird-cli-attachments`). Paths, `..`, dotfiles, symlinks and subfolders are refused (O_NOFOLLOW + realpath check), max 20 files / 25 MiB. CLI `--attach <name>` and `tb attachable`; MCP `attachments: [names]` and `email_attachments` operation `available`. Forwards keep the forwarded message attached.
+
 ### Fixed
 - MCP `email_compose` `from` / `tb compose --from` accept the sender's email address as well as an identity ID; `email_stats` lists each account's identities (`id`, `email`, `name`) (#30).
+- Bridge default `TB_BRIDGE_MAX_BODY` is 40 MiB (was 10 MiB) to fit 25 MiB of base64-encoded attachments.
 - Messages carry `dateLocal` (Thunderbird's local time with UTC offset, e.g. `2026-11-12T12:32:05+02:00`) next to `date` (UTC), so agents stop reporting UTC as local time (#28).
 
 ## [1.1.1] — 2026-11-12

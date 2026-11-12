@@ -10,6 +10,7 @@
 import { createRequire } from "module";
 import { Command } from "commander";
 import { api, output, outputError, getConfig, parseRelativeDate } from "./client.js";
+import { attachDir, listAttachable, loadAttachments } from "./attachments.js";
 
 const { version } = createRequire(import.meta.url)("../package.json");
 
@@ -544,6 +545,7 @@ program
   .option("--from <identity>", "send from identity: email address or ID (see tb identities)")
   .option("--priority <level>", "priority: highest|high|normal|low|lowest")
   .option("--header <key:value>", "custom header")
+  .option("--attach <name>", "attach a file from the attachments folder (repeatable; see tb attachable)", (v, acc) => [...acc, v], [])
   .option("--draft", "save as draft (default)")
   .option("--open", "open compose window")
   .option("--send", "send immediately")
@@ -568,6 +570,9 @@ program
     if (opts.header) payload.header = opts.header;
 
     // Mode: send, open, or draft (default)
+    const attachments = loadAttachments(opts.attach);
+    if (attachments) payload.attachments = attachments;
+
     if (opts.send) {
       payload.send = true;
     } else if (opts.open) {
@@ -580,6 +585,16 @@ program
     output(data, g.format, getOutputOpts(g));
   }));
 
+// ─── Attachable files ─────────────────────────────────────────────────
+
+program
+  .command("attachable")
+  .description("List files in the attachments folder (TB_ATTACH_DIR) that --attach can use")
+  .action(run(async () => {
+    const g = program.opts();
+    output({ folder: attachDir(), files: listAttachable() }, g.format, getOutputOpts(g));
+  }));
+
 // ─── Reply ────────────────────────────────────────────────────────────
 
 program
@@ -589,6 +604,7 @@ program
   .option("--body-file <path>", "read reply from file")
   .option("--all", "reply to all")
   .option("--html", "body is HTML")
+  .option("--attach <name>", "attach a file from the attachments folder (repeatable; see tb attachable)", (v, acc) => [...acc, v], [])
   .option("--draft", "save as draft (default)")
   .option("--open", "open compose window")
   .option("--send", "send immediately")
@@ -606,6 +622,9 @@ program
       replyAll: opts.all || false,
       isHTML: opts.html || false,
     };
+
+    const attachments = loadAttachments(opts.attach);
+    if (attachments) payload.attachments = attachments;
 
     if (opts.send) {
       payload.send = true;
@@ -626,6 +645,7 @@ program
   .description("Forward a message")
   .requiredOption("--to <address>", "forward to")
   .option("--body <text>", "additional text")
+  .option("--attach <name>", "attach a file from the attachments folder (repeatable; see tb attachable)", (v, acc) => [...acc, v], [])
   .option("--draft", "save as draft (default)")
   .option("--open", "open compose window")
   .option("--send", "send immediately")
@@ -636,6 +656,9 @@ program
       to: opts.to,
       body: opts.body || "",
     };
+
+    const attachments = loadAttachments(opts.attach);
+    if (attachments) payload.attachments = attachments;
 
     if (opts.send) {
       payload.send = true;
