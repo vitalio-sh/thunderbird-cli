@@ -46,7 +46,7 @@ export const tools = [
   {
     name: "email_stats",
     description:
-      "Get an overview of all email accounts: total accounts, unread counts, message totals. Optionally filter to a single account or include per-folder breakdown.",
+      "Get an overview of all email accounts: total accounts, unread counts, message totals, and each account's sender identities (id, email, name) for email_compose `from`. Optionally filter to a single account or include per-folder breakdown. Message dates: `date` is UTC, `dateLocal` is the user's local time.",
     inputSchema: {
       type: "object",
       properties: {
@@ -295,7 +295,7 @@ export const tools = [
         from: {
           type: "string",
           description:
-            "Identity ID to send from (use email_identities-equivalent or check email_stats for accounts)",
+            "Sender: an identity's email address (e.g. me@example.org) or its identity ID. email_stats lists each account's identities (id, email, name).",
         },
         priority: {
           type: "string",

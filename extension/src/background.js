@@ -524,7 +524,7 @@ async function handleRequest({ method, path, body }) {
     if (subject) details.subject = subject;
     if (isHTML) { details.isPlainText = false; details.body = msgBody; }
     else { details.isPlainText = true; details.plainTextBody = msgBody; }
-    if (identityId) details.identityId = identityId;
+    if (identityId) details.identityId = await resolveIdentityId(identityId);
     if (priority) details.priority = priority;
     const tab = await messenger.compose.beginNew(null, details);
     if (send) {
@@ -620,6 +620,7 @@ async function handleRequest({ method, path, body }) {
     for (const account of accounts) {
       const s = { id: account.id, name: account.name, type: account.type,
         email: account.identities?.[0]?.email || "unknown",
+        identities: (account.identities || []).map((i) => ({ id: i.id, email: i.email, name: i.name })),
         folders: 0, unreadTotal: 0, messageTotal: 0 };
       if (account.rootFolder) await countFolder(account.rootFolder, s);
       stats.push(s);
@@ -642,6 +643,7 @@ async function handleRequest({ method, path, body }) {
     for (const account of accts) {
       const s = { id: account.id, name: account.name, type: account.type,
         email: account.identities?.[0]?.email || "unknown",
+        identities: (account.identities || []).map((i) => ({ id: i.id, email: i.email, name: i.name })),
         folders: 0, unreadTotal: 0, messageTotal: 0 };
       if (body && body.folders && account.rootFolder) {
         s.folderDetails = await flattenFolders(account.rootFolder);
@@ -776,10 +778,44 @@ async function handleRequest({ method, path, body }) {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
+/**
+ * ISO 8601 in the local time zone with an explicit offset, e.g. 2026-11-12T12:32:05+02:00.
+ * Same instant as toISOString(), but readable as the user's wall-clock time.
+ */
+function toLocalIsoString(date) {
+  const pad = (n) => String(Math.abs(n)).padStart(2, "0");
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
+    `${sign}${pad(Math.trunc(offset / 60))}:${pad(offset % 60)}`;
+}
+
+/**
+ * Accept either an identity ID ("id2") or the identity's email address. Addresses are matched
+ * case-insensitively; an address shared by several identities must be given as an ID.
+ */
+async function resolveIdentityId(value) {
+  if (typeof value !== "string" || !value.includes("@")) return value;
+  const wanted = value.trim().toLowerCase();
+  const matches = [];
+  for (const account of await messenger.accounts.list(false)) {
+    for (const identity of account.identities || []) {
+      if ((identity.email || "").toLowerCase() === wanted) matches.push(identity);
+    }
+  }
+  if (matches.length === 1) return matches[0].id;
+  if (matches.length === 0) {
+    throw Object.assign(new Error(`No sender identity with address ${value}. List identities with \`tb identities\` or email_stats.`), { code: "NOT_FOUND" });
+  }
+  throw invalidArgs(`address ${value} belongs to several identities (${matches.map((i) => i.id).join(", ")}); pass the identity ID`);
+}
+
 function formatMessage(msg) {
   return {
     id: msg.id,
-    date: msg.date?.toISOString(),
+    date: msg.date?.toISOString(), // UTC ("Z")
+    dateLocal: msg.date ? toLocalIsoString(msg.date) : undefined, // Thunderbird's local time, with offset
     author: msg.author,
     subject: msg.subject,
     read: msg.read,

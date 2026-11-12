@@ -213,6 +213,9 @@ tb bulk fetch <folderId> [-l <n>]                                 # force IMAP d
 
 ## Output Format
 
+Message objects carry `date` (UTC, `…Z`) and `dateLocal` (Thunderbird's local time with offset, e.g. `2026-11-12T12:32:05+02:00`).
+`tb compose --from` takes an identity email address or ID (`tb identities`).
+
 All commands output JSON wrapped in a standard envelope:
 
 ```json
