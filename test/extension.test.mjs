@@ -56,7 +56,7 @@ function header(id, extra = {}) {
 }
 
 const calls = { query: [], getRaw: [], update: [], abort: [], compose: [] };
-let storageValue; // account access setting (#18); undefined = never configured
+const storageData = {}; // add-on settings: accountAccess (#18), sendPolicy
 let inFlight = 0, maxInFlight = 0;
 const track = async (fn) => {
   inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
@@ -79,7 +79,7 @@ const queryHandlers = [];
 const messenger = {
   runtime: { getManifest: () => manifest },
   idle: { onStateChanged: { addListener: (fn) => idleListeners.push(fn) } },
-  storage: { local: { get: async (key) => (storageValue === undefined ? {} : { [key]: storageValue }) } },
+  storage: { local: { get: async (key) => (storageData[key] === undefined ? {} : { [key]: storageData[key] }) } },
   folders: {
     get: async (id) => ({ id, accountId: String(id).startsWith("hidden") ? "acct2" : "acct1" }),
     getFolderInfo: async () => ({ totalMessageCount: 7, unreadMessageCount: 3 }),
@@ -659,11 +659,11 @@ store.set(700, { header: header(700, { folder: folder("acct1") }) });
 store.set(701, { header: header(701, { folder: folder("acct2") }) });
 const notFound = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
 
-storageValue = undefined;
+storageData.accountAccess = undefined;
 test("default (never configured) shows every account", (await handle("GET", "/accounts")).length === 2);
 test("access route reports mode all", (await handle("GET", "/access")).mode === "all");
 
-storageValue = { mode: "selected", accounts: ["acct1", "account1"] };
+storageData.accountAccess = { mode: "selected", accounts: ["acct1", "account1"] };
 test("account list is filtered", JSON.stringify((await handle("GET", "/accounts")).map((a) => a.id)) === '["account1"]');
 test("identities are filtered", (await handle("GET", "/identities")).every((i) => i.accountId === "account1"));
 test("stats are filtered", JSON.stringify((await handle("GET", "/stats")).accounts.map((a) => a.id)) === '["account1"]');
@@ -700,14 +700,34 @@ await handle("POST", "/compose", { to: "a@example.org", body: "b", identityId: "
 test("shared address resolves within visible accounts only",
   calls.compose.find((c) => c.op === "beginNew")?.details.identityId === "id2");
 
-storageValue = { mode: "selected", accounts: "acct1" }; // malformed
+storageData.accountAccess = { mode: "selected", accounts: "acct1" }; // malformed
 test("malformed setting fails closed", (await handle("GET", "/accounts")).length === 0 &&
   (await notFound(() => handle("GET", "/messages/700/headers")))?.code === "NOT_FOUND");
 test("access route reports invalid", (await handle("GET", "/access")).mode === "invalid");
-storageValue = { mode: "all" };
+storageData.accountAccess = { mode: "all" };
 test("mode all restores everything", (await handle("GET", "/messages/701/headers")).id === 701);
-storageValue = undefined;
+storageData.accountAccess = undefined;
 store.delete(700); store.delete(701);
+
+// ─── Send block ─────────────────────────────────────────────────────
+
+console.log("\n\x1b[1mSend block\x1b[0m");
+const sendErr = async (path, extra) => { calls.compose.length = 0; try { await handle("POST", path, { send: true, ...extra }); return null; } catch (e) { return e; } };
+for (const [path, extra] of [["/compose", { to: "a@example.org", body: "b" }], ["/reply", { messageId: 5, body: "b" }],
+  ["/forward", { messageId: 5, to: "x@example.org" }]]) {
+  const e = await sendErr(path, extra);
+  test(`default: ${path} send refused with SEND_DISABLED, no compose tab`, e?.code === "SEND_DISABLED" && calls.compose.length === 0);
+}
+calls.compose.length = 0;
+await handle("POST", "/compose", { to: "a@example.org", body: "b", draft: true });
+test("drafts still work with sending off", calls.compose.some((c) => c.op === "beginNew"));
+storageData.sendPolicy = { allowSend: "yes" };
+test("malformed send policy keeps sending off", (await sendErr("/compose", { to: "a@example.org", body: "b" }))?.code === "SEND_DISABLED");
+storageData.sendPolicy = { allowSend: true };
+const sentOk = await handle("POST", "/compose", { to: "a@example.org", body: "b", send: true });
+test("user-enabled sending works", sentOk.action === "sent");
+test("access route reports sendAllowed", (await handle("GET", "/access")).sendAllowed === true);
+delete storageData.sendPolicy;
 
 // ─── Attachment ─────────────────────────────────────────────────────
 

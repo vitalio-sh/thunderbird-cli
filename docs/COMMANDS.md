@@ -143,7 +143,9 @@ tb tag-create <key> <label> <color>   # create new tag
 
 ## Compose, Reply, Forward
 
-Default mode is **draft** (saves to Drafts folder without opening UI).
+Default mode is **draft** (saves to Drafts folder without opening UI). `--send` works only if the user
+ticked **Allow agents to send email directly** in the add-on's options; otherwise it fails with
+`SEND_DISABLED` and nothing is created.
 
 ```bash
 tb compose [options]

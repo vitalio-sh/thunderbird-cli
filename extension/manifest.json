@@ -30,7 +30,7 @@
   ],
   "background": {
     "scripts": [
-      "src/account-access.js",
+      "src/settings.js",
       "src/thread-utils.js",
       "src/background.js"
     ]

@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Thunderbird AI Bridge — account access</title>
+  <title>Thunderbird AI Bridge — settings</title>
   <style>
     body { font: menu; padding: 0.5em 1em; max-width: 40em; }
     fieldset { border: 1px solid #ccc; margin: 0.8em 0; }
@@ -23,8 +23,14 @@
   </fieldset>
   <p class="note">Address books (contacts) are not tied to accounts and stay available.
     Accounts added later stay hidden until you check them.</p>
+  <h2>Sending</h2>
+  <fieldset>
+    <label><input type="checkbox" id="allowSend"> Allow agents to send email directly</label>
+    <p class="note">Off (recommended): agents can only save drafts or open a compose window for you to review and send.
+      A message an agent was tricked into writing (for example by a malicious email) then never leaves without you.</p>
+  </fieldset>
   <button id="save">Save</button><span id="status" role="status"></span>
-  <script src="../src/account-access.js"></script>
+  <script src="../src/settings.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

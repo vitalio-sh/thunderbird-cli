@@ -1,4 +1,6 @@
 /**
+ * User settings from the add-on's options page. No bridge route can write them.
+ *
  * Per-account access (#18).
  *
  * The user chooses, on the add-on's options page in Thunderbird, whether agents see all accounts
@@ -31,5 +33,25 @@ async function loadAccountAccess() {
     return parseAccountAccess(stored?.[ACCOUNT_ACCESS_KEY]);
   } catch {
     return { mode: "invalid", accounts: new Set() }; // unreadable setting: fail closed
+  }
+}
+
+/**
+ * Send policy. Default: agents cannot send directly; they get drafts or an open compose window
+ * for the user to review. Stored value (key "sendPolicy"): { allowSend: true } enables direct
+ * sending; missing or anything else keeps it off (fail closed).
+ */
+const SEND_POLICY_KEY = "sendPolicy";
+
+function parseSendPolicy(value) {
+  return { allowSend: !!(value && typeof value === "object" && value.allowSend === true) };
+}
+
+async function loadSendPolicy() {
+  try {
+    const stored = await messenger.storage.local.get(SEND_POLICY_KEY);
+    return parseSendPolicy(stored?.[SEND_POLICY_KEY]);
+  } catch {
+    return { allowSend: false };
   }
 }
