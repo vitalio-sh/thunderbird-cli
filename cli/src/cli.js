@@ -541,7 +541,7 @@ program
   .option("--body <text>", "message body")
   .option("--body-file <path>", "read body from file")
   .option("--html", "body is HTML")
-  .option("--from <identityId>", "send from specific identity")
+  .option("--from <identity>", "send from identity: email address or ID (see tb identities)")
   .option("--priority <level>", "priority: highest|high|normal|low|lowest")
   .option("--header <key:value>", "custom header")
   .option("--draft", "save as draft (default)")

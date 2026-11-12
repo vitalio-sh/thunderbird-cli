@@ -94,6 +94,14 @@ const messenger = {
     sendMessage: async () => {},
   },
   tabs: { remove: async () => {} },
+  accounts: {
+    list: async () => [
+      { id: "account1", name: "Work", type: "imap", rootFolder: null,
+        identities: [{ id: "id1", email: "Me@Example.org", name: "Me" }, { id: "id2", email: "shared@example.org" }] },
+      { id: "account2", name: "Home", type: "imap", rootFolder: null,
+        identities: [{ id: "id3", email: "shared@example.org" }] },
+    ],
+  },
   messages: {
     get: (id) => track(async () => {
       if (!store.has(id)) throw new Error(`Message ${id} not found`);
@@ -574,6 +582,31 @@ for (const [label, body] of [
   try { await handle("POST", "/messages/update", body); } catch (e) { error = e; }
   test(`rejects ${label}`, error?.code === "INVALID_ARGS");
 }
+
+// ─── #30 sender identities, #28 local dates ─────────────────────────
+
+console.log("\n\x1b[1mIdentities and dates\x1b[0m");
+calls.compose.length = 0;
+await handle("POST", "/compose", { to: "a@example.org", body: "b", identityId: "me@example.ORG", draft: true });
+test("sender address resolves to its identity ID (case-insensitive)",
+  calls.compose.find((c) => c.op === "beginNew")?.details.identityId === "id1");
+calls.compose.length = 0;
+await handle("POST", "/compose", { to: "a@example.org", body: "b", identityId: "id3", draft: true });
+test("identity IDs pass through unchanged", calls.compose.find((c) => c.op === "beginNew")?.details.identityId === "id3");
+let idErr;
+try { await handle("POST", "/compose", { to: "a@example.org", body: "b", identityId: "nobody@example.org" }); } catch (e) { idErr = e; }
+test("unknown sender address → NOT_FOUND", idErr?.code === "NOT_FOUND");
+idErr = null;
+try { await handle("POST", "/compose", { to: "a@example.org", body: "b", identityId: "shared@example.org" }); } catch (e) { idErr = e; }
+test("address shared by two identities must be given as an ID", idErr?.code === "INVALID_ARGS" && /id2, id3/.test(idErr.message));
+const statsResult = await handle("GET", "/stats");
+test("stats lists each account's identities",
+  JSON.stringify(statsResult.accounts[0].identities) === JSON.stringify([{ id: "id1", email: "Me@Example.org", name: "Me" }, { id: "id2", email: "shared@example.org" }]));
+
+const formatted = ctx.formatMessage(header(1, { date: new Date("2026-06-15T10:32:05Z") }));
+test("date stays UTC", formatted.date === "2026-06-15T10:32:05.000Z");
+test("dateLocal has an explicit offset", /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/.test(formatted.dateLocal), formatted.dateLocal);
+test("dateLocal is the same instant", new Date(formatted.dateLocal).getTime() === new Date(formatted.date).getTime());
 
 // ─── Attachment ─────────────────────────────────────────────────────
 

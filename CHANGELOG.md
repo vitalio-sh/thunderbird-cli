@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- MCP `email_compose` `from` / `tb compose --from` accept the sender's email address as well as an identity ID; `email_stats` lists each account's identities (`id`, `email`, `name`) (#30).
+- Messages carry `dateLocal` (Thunderbird's local time with UTC offset, e.g. `2026-11-12T12:32:05+02:00`) next to `date` (UTC), so agents stop reporting UTC as local time (#28).
+
 ## [1.1.1] — 2026-11-12
 
 npm packages 1.1.1; Thunderbird extension 2.1.1.
