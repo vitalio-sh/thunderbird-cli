@@ -10,7 +10,7 @@
     "mcp"
   ],
   "scripts": {
-    "test": "node test/quick-test.mjs",
+    "test": "node test/quick-test.mjs && node test/cli-regressions.test.mjs",
     "test:mcp": "node test/mcp-test.mjs",
     "test:bridge-auth": "node test/bridge-auth.mjs",
     "test:bridge-security": "node test/bridge-security.mjs",

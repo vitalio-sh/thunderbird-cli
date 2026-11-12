@@ -55,7 +55,7 @@ Use these; don't reach for the 38-command CLI unless the user explicitly asks fo
 | `email_mark` | Set read / unread / flagged / unflagged / junk / not-junk; add/remove tags (`addTags`, `removeTags`) or replace them (`tags`) (batch supported) | ✅ reversible |
 | `email_archive` | `operation: archive / move / delete`. `delete` requires `permanent` + `confirm` | ⚠️ confirm for permanent |
 | `email_attachments` | List attachments, or download one (single or `--all`) | ✅ read-only |
-| `email_folders` | List folders, get folder info, trigger sync | ✅ read-only |
+| `email_folders` | List folders, get folder info (`sync` is unsupported) | ✅ read-only |
 
 ## Core patterns — always apply these
 
@@ -235,7 +235,7 @@ Thunderbird isn't open, or the extension hasn't connected yet. Ask the user to o
 ### "Tool returns TIMEOUT"
 A timed-out search means the results are **unknown**, not that nothing matched — never report "not found" after a TIMEOUT. For `email_search`, narrow with `since`/`until` or `folderId`, and keep the default `searchMode: "fulltext"` (the `body` mode scans messages and is much slower). If full-text search finds nothing that should exist, Thunderbird's Global Search indexer may be off (Settings → General).
 
-IMAP sync may be slow on first run with many accounts. Retry once after ~10 seconds. If it keeps timing out, suggest the user run `tb sync --account <name>` from the CLI to force a manual sync.
+IMAP sync may be slow on first run with many accounts. Retry once after ~10 seconds. If it keeps timing out, ask the user to press Get Messages in Thunderbird; this connector cannot trigger IMAP sync.
 
 ### "NOT_FOUND on account"
 The account name in the request doesn't match any configured account. Call `email_stats` to get the correct labels.

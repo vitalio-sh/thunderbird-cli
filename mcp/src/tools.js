@@ -105,13 +105,13 @@ export const tools = [
         },
         until: { type: "string", description: "End date (ISO or relative)" },
         hasAttachment: { type: "boolean", description: "Only with attachments" },
-        sizeMin: { type: "number", description: "Minimum message size in bytes" },
-        sizeMax: { type: "number", description: "Maximum message size in bytes" },
+        sizeMin: { type: "integer", minimum: 0, description: "Minimum message size in bytes" },
+        sizeMax: { type: "integer", minimum: 0, description: "Maximum message size in bytes" },
         includeJunk: {
           type: "boolean",
           description: "Include junk messages (default: false)",
         },
-        limit: { type: "number", description: "Max results", default: 25 },
+        limit: { type: "integer", minimum: 0, description: "Max results", default: 25 },
       },
     },
     handler: async (args, api) => {
@@ -119,14 +119,14 @@ export const tools = [
       const hasFilter = [
         "accountId", "folderId", "from", "to", "subject", "unread", "flagged",
         "tag", "since", "until", "hasAttachment", "sizeMin", "sizeMax",
-      ].some((key) => args[key]);
+      ].some((key) => args[key] !== undefined && args[key] !== null && args[key] !== "" && args[key] !== false);
       if (!query && !hasFilter) {
         throw Object.assign(
           new Error("email_search requires a query or at least one filter"),
           { code: "INVALID_ARGS" }
         );
       }
-      const body = { limit: args.limit || 25 };
+      const body = { limit: args.limit ?? 25 };
       if (query) body.query = query;
       if (args.searchMode) body.searchMode = args.searchMode;
       if (args.accountId) body.accountId = args.accountId;
@@ -140,8 +140,8 @@ export const tools = [
       if (args.since) body.fromDate = parseRelativeDate(args.since);
       if (args.until) body.toDate = parseRelativeDate(args.until);
       if (args.hasAttachment) body.hasAttachment = true;
-      if (args.sizeMin) body.sizeMin = args.sizeMin;
-      if (args.sizeMax) body.sizeMax = args.sizeMax;
+      if (args.sizeMin != null) body.sizeMin = args.sizeMin;
+      if (args.sizeMax != null) body.sizeMax = args.sizeMax;
       if (args.includeJunk) body.includeJunk = true;
       try {
         return await api("POST", "/messages/search", body);
@@ -169,7 +169,7 @@ export const tools = [
         },
         unread: { type: "boolean", description: "Unread only" },
         flagged: { type: "boolean", description: "Flagged only" },
-        offset: { type: "number", description: "Skip first N (pagination)" },
+        offset: { type: "integer", minimum: 0, description: "Skip first N (pagination)" },
         sort: {
           type: "string",
           enum: ["date", "from", "subject", "size"],
@@ -180,12 +180,12 @@ export const tools = [
           enum: ["asc", "desc"],
           description: "Sort direction",
         },
-        limit: { type: "number", description: "Max results", default: 25 },
+        limit: { type: "integer", minimum: 0, description: "Max results", default: 25 },
       },
       required: ["folderId"],
     },
     handler: async (args, api) => {
-      const body = { folderId: args.folderId, limit: args.limit || 25 };
+      const body = { folderId: args.folderId, limit: args.limit ?? 25 };
       if (args.unread) body.unreadOnly = true;
       if (args.flagged) body.flagged = true;
       if (args.offset) body.offset = args.offset;
@@ -204,7 +204,8 @@ export const tools = [
       type: "object",
       properties: {
         messageId: {
-          type: "number",
+          type: "integer",
+          minimum: 1,
           description: "Thunderbird internal message ID",
         },
         mode: {
@@ -214,8 +215,9 @@ export const tools = [
           default: "default",
         },
         maxBody: {
-          type: "number",
-          description: "Truncate body to N characters",
+          type: "integer",
+          minimum: 0,
+          description: "Truncate each body representation (text, HTML, raw) to N characters; 0 = no limit",
         },
       },
       required: ["messageId"],
@@ -232,9 +234,21 @@ export const tools = [
       else result = await api("GET", `/messages/${id}`);
 
       // Apply maxBody truncation
-      if (args.maxBody && result?.parts?.text && result.parts.text.length > args.maxBody) {
-        result.parts.text = result.parts.text.slice(0, args.maxBody) + "\n...[truncated]";
-        result.parts.textTruncated = true;
+      const max = args.maxBody;
+      if (max > 0) {
+        const cut = (v) => v.slice(0, max) + "\n...[truncated]";
+        if (typeof result?.parts?.text === "string" && result.parts.text.length > max) {
+          result.parts.text = cut(result.parts.text);
+          result.parts.textTruncated = true;
+        }
+        if (typeof result?.parts?.html === "string" && result.parts.html.length > max) {
+          result.parts.html = cut(result.parts.html);
+          result.parts.htmlTruncated = true;
+        }
+        if (typeof result?.raw === "string" && result.raw.length > max) {
+          result.raw = cut(result.raw);
+          result.rawTruncated = true;
+        }
       }
       return result;
     },
@@ -248,7 +262,7 @@ export const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        messageId: { type: "number", description: "Message ID" },
+        messageId: { type: "integer", minimum: 1, description: "Message ID" },
       },
       required: ["messageId"],
     },
@@ -323,7 +337,7 @@ export const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        messageId: { type: "number", description: "Message ID to reply to" },
+        messageId: { type: "integer", minimum: 1, description: "Message ID to reply to" },
         body: { type: "string", description: "Reply body" },
         replyAll: { type: "boolean", description: "Reply to all recipients" },
         mode: {
@@ -356,7 +370,7 @@ export const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        messageId: { type: "number", description: "Message ID to forward" },
+        messageId: { type: "integer", minimum: 1, description: "Message ID to forward" },
         to: { type: "string", description: "Recipient address" },
         body: { type: "string", description: "Optional additional text" },
         mode: {
@@ -391,7 +405,7 @@ export const tools = [
       properties: {
         messageIds: {
           type: "array",
-          items: { type: "number" },
+          items: { type: "integer", minimum: 1 },
           description: "Message IDs",
         },
         read: { type: "boolean", description: "Mark as read (true) or unread (false)" },
@@ -451,7 +465,7 @@ export const tools = [
       properties: {
         messageIds: {
           type: "array",
-          items: { type: "number" },
+          items: { type: "integer", minimum: 1 },
           description: "Message IDs",
         },
         operation: {
@@ -508,7 +522,7 @@ export const tools = [
     inputSchema: {
       type: "object",
       properties: {
-        messageId: { type: "number", description: "Message ID" },
+        messageId: { type: "integer", minimum: 1, description: "Message ID" },
         operation: {
           type: "string",
           enum: ["list", "download"],
@@ -539,7 +553,7 @@ export const tools = [
   {
     name: "email_folders",
     description:
-      "List folders for an account, get folder info with message counts, or trigger sync. Operations: 'list' (folders for account), 'all' (across all accounts), 'info' (one folder), 'sync' (refresh from IMAP).",
+      "List folders for an account or get folder info with message counts. Operations: 'list' (folders for account), 'all' (across all accounts), 'info' (one folder). 'sync' is unsupported (the WebExtension API cannot trigger IMAP sync) and returns an error; ask the user to use Thunderbird's Get Messages.",
     inputSchema: {
       type: "object",
       properties: {

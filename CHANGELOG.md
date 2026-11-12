@@ -24,6 +24,25 @@ npm packages 1.1.1; Thunderbird extension 2.1.1.
 ### Added
 - MCP `email_mark` can add, remove or replace tags (`addTags`, `removeTags`, `tags`) (#10).
 
+### Fixed (correctness fixes from #27, ported by maintainers)
+- Search: `tag`, `sizeMin` and `sizeMax` are passed to Thunderbird's query instead of filtering the already-limited page, which missed matches; `sizeMin`/`sizeMax` of 0 are honoured.
+- Pagination: `hasMore` is exact (one look-ahead match, including inside the last native page); unfinished native lists are aborted; invalid `limit`/`offset` are rejected. `tb recent` picks the newest messages across all pages.
+- Bulk: `bulk tag`, `bulk delete` and `bulk move` apply their filters before the batch limit (already-tagged messages no longer use up the batch). `bulk move` now filters in the extension and refuses to run against an older extension that ignores the filters.
+- Threads follow continuation pages and report lookup failures instead of returning a partial thread.
+- Reply keeps Thunderbird's native quotation (the body used to be replaced) and honours `tb reply --html`. Compose `--priority` uses the native priority field.
+- Text attachments are no longer merged into the body; attachment lists and `check-download`/`download-status` use Thunderbird's own metadata (`listAttachments`, `headersOnly`), and `hasAttachments` is real.
+- Folder counts come from `getFolderInfo` and failures are reported, not shown as 0.
+- `tb sync` / MCP `email_folders sync` return an explicit error: the WebExtension API cannot trigger IMAP sync (it used to report success without syncing).
+- CLI: message IDs and counts are validated before any request; an HTTP-200 `{ error }` payload exits non-zero (`NOT_FOUND` where applicable); `--max-body` also truncates HTML, raw source and arrays.
+- MCP: arguments are validated against each tool's schema (integers, minimums); handler errors are flagged `isError`; `limit: 0` and size 0 are preserved; `maxBody` also truncates HTML and raw.
+- Bridge: request bodies are decoded once after all chunks arrive (a UTF-8 character split across chunks was corrupted); aborted uploads get a 400; unknown command-line flags are rejected. `npm run build:xpi` no longer writes a world-writable file.
+
+### Security (#38)
+- `tb attachment-download --all` keeps only the last path segment of sender-supplied filenames, writes files `0600`, and never overwrites an existing file.
+- CLI and MCP reject message/account IDs that would escape their URL path segment (e.g. `1/../../compose`).
+- Bridge caps request bodies (`TB_BRIDGE_MAX_BODY`, default 10 MiB → 413) and the `X-TB-Timeout` override (`TB_BRIDGE_MAX_TIMEOUT`, default 10 min); in-flight requests fail immediately with `EXTENSION_DISCONNECTED` when the extension disconnects or is replaced.
+- SECURITY.md and the skill no longer describe sanitization, trust metadata or other defenses that are not implemented.
+
 ## [1.1.0] — 2026-09-14
 
 npm packages `thunderbird-cli`, `thunderbird-cli-bridge`, `thunderbird-cli-mcp` 1.1.0; Thunderbird extension 2.1.0.

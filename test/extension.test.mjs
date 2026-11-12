@@ -55,7 +55,7 @@ function header(id, extra = {}) {
   };
 }
 
-const calls = { query: [], getRaw: [], update: [] };
+const calls = { query: [], getRaw: [], update: [], abort: [], compose: [] };
 let inFlight = 0, maxInFlight = 0;
 const track = async (fn) => {
   inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
@@ -78,7 +78,22 @@ const queryHandlers = [];
 const messenger = {
   runtime: { getManifest: () => manifest },
   idle: { onStateChanged: { addListener: (fn) => idleListeners.push(fn) } },
-  folders: { get: async (id) => ({ id, accountId: "acct1" }) },
+  folders: {
+    get: async (id) => ({ id, accountId: "acct1" }),
+    getFolderInfo: async () => ({ totalMessageCount: 7, unreadMessageCount: 3 }),
+  },
+  compose: {
+    beginNew: async (_, details) => { calls.compose.push({ op: "beginNew", details }); return { id: 1 }; },
+    beginReply: async (messageId, type, details) => {
+      calls.compose.push({ op: "beginReply", messageId, type, details });
+      return { id: 2 };
+    },
+    getComposeDetails: async () => ({ isPlainText: true, plainTextBody: "> quoted original" }),
+    setComposeDetails: async (tabId, details) => { calls.compose.push({ op: "set", tabId, details }); },
+    saveMessage: async () => {},
+    sendMessage: async () => {},
+  },
+  tabs: { remove: async () => {} },
   messages: {
     get: (id) => track(async () => {
       if (!store.has(id)) throw new Error(`Message ${id} not found`);
@@ -105,6 +120,9 @@ const messenger = {
     // Paginated like Thunderbird (small pages to exercise continueList)
     list: async () => pageOf([...store.values()].map((s) => s.header), 0),
     continueList: async (id) => pages.get(id)?.() ?? null,
+    abortList: async (id) => { calls.abort.push(id); },
+    listAttachments: async (id) => store.get(id)?.attachments || [],
+    delete: async (ids) => { calls.delete = ids; },
     update: (id, props) => track(async () => { calls.update.push({ id, props }); }),
     getAttachmentFile: async () => {
       const bytes = randomBytes(100_000);
@@ -308,6 +326,254 @@ const lastPage = await handle("POST", "/messages/list", { folderId: "f1", limit:
 test("last sorted page has hasMore=false", lastPage.messages.length === 2 && lastPage.hasMore === false);
 const unsorted = await handle("POST", "/messages/list", { folderId: "f1", limit: 3 });
 test("without sort, listing keeps database order and paging", JSON.stringify(unsorted.messages.map((m) => m.id)) === "[1,2,3]" && unsorted.hasMore === true);
+
+
+// ─── Ported from #27: native filters, pagination, sorting ───────────
+
+console.log("\n\x1b[1mNative search filters\x1b[0m");
+queryHandlers.length = 0;
+queryHandlers.push((q) => ({ messages: [
+  header(20, { tags: [], size: 10 }),
+  header(21, { tags: ["$label1"], size: 100 }),
+  header(22, { tags: ["$label1"], size: 200 }),
+].filter((m) => (!q.tags || Object.entries(q.tags.tags).every(([tag, value]) => m.tags.includes(tag) === value))
+  && (q.size?.min === undefined || m.size >= q.size.min)
+  && (q.size?.max === undefined || m.size <= q.size.max)) }));
+calls.query.length = 0;
+for (const [label, filters, expectedId] of [
+  ["tag", { tag: "$label1" }, 21],
+  ["minimum size", { sizeMin: 100 }, 21],
+  ["maximum size", { sizeMax: 10 }, 20],
+  ["tag and inclusive size range", { tag: "$label1", sizeMin: 100, sizeMax: 100 }, 21],
+]) {
+  const r = await handle("POST", "/messages/search", { ...filters, limit: 1 });
+  test(`${label} applied before limit`, r.messages.length === 1 && r.messages[0].id === expectedId);
+}
+const zeroSize = await handle("POST", "/messages/search", { sizeMax: 0, limit: 1 });
+test("zero maximum size is not ignored", zeroSize.total === 0);
+test("tag is passed to native query", calls.query.some((q) => q.tags?.mode === "all" && q.tags.tags.$label1 === true));
+test("size range is passed to native query", calls.query.some((q) => q.size?.min === 100 && q.size?.max === 100));
+queryHandlers.length = 0;
+
+console.log("\n\x1b[1mCollector pagination\x1b[0m");
+const previousContinue = messenger.messages.continueList;
+const previousAbort = messenger.messages.abortList;
+const continued = [], aborted = [];
+let collectPages;
+messenger.messages.continueList = async (id) => {
+  continued.push(id);
+  const page = collectPages.get(id);
+  if (page instanceof Error) throw page;
+  return page;
+};
+messenger.messages.abortList = async (id) => { aborted.push(id); };
+async function collect(first, following = [], limit = 1, options = {}) {
+  collectPages = new Map(following);
+  continued.length = 0;
+  aborted.length = 0;
+  return ctx.collectMessages(async () => first, limit, options);
+}
+let pageResult = await collect({ messages: [header(30), header(31)] });
+test("truncation inside final page reports hasMore", pageResult.total === 1 && pageResult.hasMore);
+pageResult = await collect({ messages: [header(30)] });
+test("exact limit on final page reports no more", pageResult.total === 1 && !pageResult.hasMore);
+pageResult = await collect({ messages: [] });
+test("empty result reports no more", pageResult.total === 0 && !pageResult.hasMore);
+pageResult = await collect({ id: "next", messages: [header(30)] }, [["next", { messages: [header(31)] }]]);
+test("lookahead finds a match on next page", pageResult.hasMore && continued.length === 1);
+pageResult = await collect({ id: "next", messages: [header(30)] }, [["next", { messages: [] }]]);
+test("empty trailing page does not imply more results", !pageResult.hasMore);
+pageResult = await collect({ messages: [header(30), header(31, { read: true })] }, [], 1, { unreadOnly: true });
+test("filtered tail does not imply more results", !pageResult.hasMore);
+pageResult = await collect({ id: "next", messages: [header(30)] }, [["next", {
+  id: "last", messages: [header(31, { read: true })],
+}], ["last", { messages: [header(32)] }]], 1, { unreadOnly: true });
+test("lookahead crosses filtered pages", pageResult.hasMore && continued.length === 2);
+pageResult = await collect({ messages: [header(30), header(31), header(32)] }, [], 1, { offset: 1 });
+test("offset skips matches before limit and lookahead", pageResult.messages[0]?.id === 31 && pageResult.offset === 1 && pageResult.hasMore);
+pageResult = await collect({ id: "next", messages: [header(30), header(31)] }, [], 1);
+test("early completion aborts Thunderbird list", pageResult.hasMore && aborted[0] === "next" && continued.length === 0);
+pageResult = await collect({ id: "next", messages: [header(30)] }, [["next", { messages: [header(31)] }]], Infinity);
+test("unbounded callers still collect all pages", pageResult.total === 2 && !pageResult.hasMore);
+let pageError;
+try { await collect({ id: "next", messages: [header(30)] }, [["next", new Error("page failed")]]); }
+catch (e) { pageError = e; }
+test("pagination errors propagate and abort list", pageError?.message === "page failed" && aborted[0] === "next");
+messenger.messages.abortList = async () => { throw new Error("list already gone"); };
+pageError = null;
+try { await collect({ id: "next", messages: [header(30)] }, [["next", new Error("original page error")]]); }
+catch (e) { pageError = e; }
+test("cleanup failure does not hide original error", pageError?.message === "original page error");
+pageError = null;
+try { await collect({ id: "next", messages: [header(30), header(31)] }); }
+catch (e) { pageError = e; }
+test("cleanup failure after success is reported", pageError?.message === "list already gone");
+messenger.messages.abortList = async (id) => { aborted.push(id); };
+
+let invalidQueries = 0;
+for (const [limit, offset] of [[NaN, 0], [-1, 0], [1.5, 0], ["1", 0], [1, -1], [1, NaN], [1, 0.5]]) {
+  let error;
+  try { await ctx.collectMessages(async () => { invalidQueries++; }, limit, { offset }); }
+  catch (e) { error = e; }
+  test(`invalid limit/offset rejected (${limit}/${offset})`, error?.message.startsWith("INVALID_ARGS"));
+}
+test("invalid pagination does not start a Thunderbird query", invalidQueries === 0);
+
+// Compare every small page/limit/offset combination with a plain array oracle.
+let combinations = 0, mismatch = null;
+for (let count = 0; count <= 6; count++) {
+  const source = Array.from({ length: count }, (_, i) => header(i + 1, {
+    read: i % 2 === 0, flagged: i % 3 === 0, folder: folder(i % 2 ? "acct1" : "acct2"),
+  }));
+  for (const pageSize of [1, 2, 3]) {
+    for (const options of [{}, { unreadOnly: true }, { flaggedOnly: true }, { accountId: "acct1" },
+      { unreadOnly: true, flaggedOnly: true, accountId: "acct1" }]) {
+      const matching = source.filter(m => (!options.unreadOnly || !m.read)
+        && (!options.flaggedOnly || m.flagged) && (!options.accountId || m.folder.accountId === options.accountId));
+      for (let offset = 0; offset <= count + 1; offset++) {
+        for (const limit of [0, 1, 2, 3, 7, Infinity]) {
+          const queue = [[]];
+          for (let i = 0; i < source.length; i += pageSize) queue.push(source.slice(i, i + pageSize), []);
+          const next = async () => ({ messages: queue.shift(), id: queue.length ? "cursor" : null });
+          messenger.messages.continueList = next;
+          const r = await ctx.collectMessages(next, limit, { ...options, offset });
+          const expected = matching.slice(offset, offset + limit).map(m => m.id);
+          if (JSON.stringify(r.messages.map(m => m.id)) !== JSON.stringify(expected) ||
+              r.total !== expected.length || r.offset !== offset ||
+              r.hasMore !== (matching.length > offset + limit)) {
+            mismatch = { count, pageSize, options, offset, limit };
+          }
+          combinations++;
+        }
+      }
+    }
+  }
+}
+test(`pagination array oracle (${combinations} combinations)`, mismatch === null, JSON.stringify(mismatch));
+messenger.messages.continueList = previousContinue;
+messenger.messages.abortList = previousAbort;
+
+// Sorted pagination must consider later native pages before offset and limit.
+const previousList = messenger.messages.list;
+const sortedSource = [
+  header(101, { date: date('2026-01-02'), author: 'c', subject: 'z', size: 50, flagged: true }),
+  header(102, { date: date('2026-01-05'), author: 'a', subject: 'b', size: 10, read: true, flagged: true }),
+  header(103, { date: date('2026-01-04'), author: 'd', subject: 'a', size: 80, flagged: true }),
+  header(104, { date: date('2026-01-03'), author: 'b', subject: 'y', size: 90, folder: folder('acct2') }),
+  header(105, { date: date('2026-01-04'), author: 'c', subject: 'b', size: 60, flagged: true }),
+];
+let sortedPages;
+function firstSortedPage() {
+  sortedPages = [sortedSource.slice(0, 2), [], sortedSource.slice(2, 4), sortedSource.slice(4)];
+  return nextSortedPage();
+}
+function nextSortedPage() {
+  const messages = sortedPages.shift();
+  return { messages, id: sortedPages.length ? 'sorted-cursor' : null };
+}
+messenger.messages.list = async () => firstSortedPage();
+messenger.messages.continueList = async () => nextSortedPage();
+messenger.messages.abortList = async () => {};
+let sortedCases = 0, sortedMismatch = null;
+for (const sort of ['date', 'from', 'subject', 'size']) {
+  for (const sortOrder of ['asc', 'desc']) {
+    for (const filters of [{}, { unreadOnly: true, flagged: true }]) {
+      const expected = sortedSource.filter(m => (!filters.unreadOnly || !m.read) && (!filters.flagged || m.flagged));
+      const key = sort === 'from' ? 'author' : sort;
+      const dir = sortOrder === 'asc' ? 1 : -1;
+      expected.sort((a, b) => dir * (a[key] < b[key] ? -1 : a[key] > b[key] ? 1 : 0));
+      for (const offset of [0, 1, 4, 5, 9]) {
+        for (const limit of [0, 1, 2, 5, Infinity]) {
+          const r = await handle('POST', '/messages/list', { folderId: 'inbox', sort, sortOrder, offset, limit, ...filters });
+          const wanted = expected.slice(offset, offset + limit).map(m => m.id);
+          if (JSON.stringify(r.messages.map(m => m.id)) !== JSON.stringify(wanted) ||
+              r.total !== wanted.length || r.offset !== offset || r.hasMore !== (expected.length > offset + limit)) {
+            sortedMismatch = { sort, sortOrder, filters, offset, limit };
+          }
+          sortedCases++;
+        }
+      }
+    }
+  }
+}
+test(`sorted folder pagination across pages (${sortedCases} cases)`, sortedMismatch === null, JSON.stringify(sortedMismatch));
+queryHandlers.push(() => firstSortedPage());
+const latest = await handle('POST', '/recent', { limit: 1 });
+test('recent chooses newest from all native pages before limiting', latest.messages[0]?.id === 102 && latest.hasMore);
+const unreadLatest = await handle('POST', '/recent', { limit: 2, accountId: 'acct1', unreadOnly: true });
+test('recent filters before sorted pagination and preserves ties',
+  JSON.stringify(unreadLatest.messages.map(m => m.id)) === JSON.stringify([103, 105]) && unreadLatest.hasMore);
+queryHandlers.length = 0;
+
+// Bulk filters run before the limit (list for `tb bulk move`, and bulk delete).
+const filtered = await handle('POST', '/messages/list', { folderId: 'inbox', limit: 1, from: 'd' });
+test('list applies bulk filters before the limit', filtered.messages[0]?.id === 103 && filtered.bulkFiltersApplied === true);
+const patterned = await handle('POST', '/messages/list', { folderId: 'inbox', limit: 5, subjectPattern: '^[yz]$' });
+test('subjectPattern filter', JSON.stringify(patterned.messages.map(m => m.id)) === '[101,104]');
+const old = await handle('POST', '/messages/list', { folderId: 'inbox', limit: 5, olderThan: 0 });
+test('olderThan: 0 is honoured, not dropped', old.messages.length === 5);
+const delResult = await handle('POST', '/bulk/delete', { folderId: 'inbox', limit: 1, from: 'd' });
+test('bulk delete filters before limiting', delResult.deleted === 1 && JSON.stringify(calls.delete) === '[103]');
+let badOlder;
+try { await handle('POST', '/messages/list', { folderId: 'inbox', olderThan: '5' }); } catch (e) { badOlder = e; }
+test('non-integer olderThan rejected', badOlder?.code === 'INVALID_ARGS');
+messenger.messages.list = previousList;
+messenger.messages.continueList = previousContinue;
+messenger.messages.abortList = previousAbort;
+
+// ─── Ported from #27: message state, attachments, compose, sync ─────
+
+console.log("\n\x1b[1mMessage state and compose\x1b[0m");
+store.set(900, { header: header(900, { headersOnly: true }), attachments: [] });
+store.set(901, { header: header(901), attachments: [{ name: "a.txt", contentType: "text/plain", partName: "1.2", size: 3 }],
+  full: { contentType: "multipart/mixed", parts: [] } });
+const partial = await handle("GET", "/messages/900/check-download");
+test("headersOnly message reports headers_only", partial.downloadState === "headers_only" && partial.hasBody === false);
+const complete = await handle("GET", "/messages/901/check-download");
+test("attachment-only message is full and reports attachments", complete.downloadState === "full" && complete.hasAttachments === true);
+const status = await handle("GET", "/messages/901/download-status");
+test("download-status uses the same state", status.state === "full");
+const listed = await handle("GET", "/messages/901/attachments");
+test("attachment list comes from native metadata (includes text/*)", listed.length === 1 && listed[0].name === "a.txt");
+store.delete(900); store.delete(901);
+
+const parts = ctx.extractParts({ contentType: "multipart/mixed", parts: [
+  { contentType: "text/plain", body: "real body", partName: "1.1" },
+  { contentType: "text/plain", body: "attached notes", partName: "1.2", name: "notes.txt" },
+  { contentType: "text/html", body: "<p>x</p>", partName: "1.3", headers: { "content-disposition": ["attachment; filename=x.html"] } },
+] });
+test("text attachments stay out of the body", parts.text === "real body" && parts.html === "");
+test("text attachments are listed", parts.attachments.map((a) => a.partName).join() === "1.2,1.3");
+
+calls.compose.length = 0;
+await handle("POST", "/reply", { messageId: 5, body: "Thanks!", draft: true });
+const set = calls.compose.find((c) => c.op === "set");
+test("reply keeps Thunderbird's quotation", set?.details.plainTextBody === "Thanks!\n\n> quoted original");
+test("reply opens the native reply without replacing its body",
+  !("plainTextBody" in (calls.compose.find((c) => c.op === "beginReply")?.details || {})));
+
+calls.compose.length = 0;
+await handle("POST", "/compose", { to: "a@example.org", subject: "s", body: "b", priority: "high", draft: true });
+const begun = calls.compose.find((c) => c.op === "beginNew")?.details;
+test("priority uses the native compose field", begun?.priority === "high" && !begun?.customHeaders);
+
+let syncError;
+try { await handle("POST", "/sync", { all: true }); } catch (e) { syncError = e; }
+test("sync reports it is unsupported instead of claiming success", /Manual sync required/.test(syncError?.message || ""));
+const syncStatus = await handle("POST", "/sync/status", { folderId: "f1" });
+test("sync-status counts come from getFolderInfo", syncStatus.totalMessages === 7 && syncStatus.unread === 3);
+
+console.log("\n\x1b[1mInput validation\x1b[0m");
+for (const [label, body] of [
+  ["string boolean", { folderId: "f1", unreadOnly: "true" }],
+  ["string message ID", { messageId: "1/../x" }],
+  ["non-integer message IDs", { messageIds: [1, 2.5] }],
+  ["array body", [1, 2]],
+]) {
+  let error;
+  try { await handle("POST", "/messages/update", body); } catch (e) { error = e; }
+  test(`rejects ${label}`, error?.code === "INVALID_ARGS");
+}
 
 // ─── Attachment ─────────────────────────────────────────────────────
 

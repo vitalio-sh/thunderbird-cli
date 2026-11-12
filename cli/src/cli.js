@@ -49,8 +49,26 @@ function run(fn) {
   };
 }
 
+function parseMessageId(id) {
+  const text = String(id).trim();
+  const value = Number(text);
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(value) || value <= 0) {
+    throw Object.assign(new Error(`Message IDs must be positive integers: ${id}`), { code: "INVALID_ARGS" });
+  }
+  return value;
+}
+
 function parseIds(str) {
-  return str.split(",").map(id => parseInt(id.trim()));
+  return str.split(",").map(parseMessageId);
+}
+
+function parseCount(value, label = "Count") {
+  const text = String(value).trim();
+  const number = Number(text);
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(number)) {
+    throw Object.assign(new Error(`${label} must be a nonnegative integer: ${value}`), { code: "INVALID_ARGS" });
+  }
+  return number;
 }
 
 // ─── Health ───────────────────────────────────────────────────────────
@@ -298,22 +316,22 @@ program
     const outOpts = getOutputOpts(g);
 
     if (opts.raw) {
-      const data = await api("GET", `/messages/${messageId}/raw`, null, timeout);
+      const data = await api("GET", `/messages/${parseMessageId(messageId)}/raw`, null, timeout);
       output(data, g.format, outOpts);
     } else if (opts.headers) {
-      const data = await api("GET", `/messages/${messageId}/headers`, null, timeout);
+      const data = await api("GET", `/messages/${parseMessageId(messageId)}/headers`, null, timeout);
       output(data, g.format, outOpts);
     } else if (opts.full) {
-      const data = await api("GET", `/messages/${messageId}/full`, null, timeout);
+      const data = await api("GET", `/messages/${parseMessageId(messageId)}/full`, null, timeout);
       output(data, g.format, outOpts);
     } else if (opts.checkDownload) {
-      const data = await api("GET", `/messages/${messageId}/check-download`, null, timeout);
+      const data = await api("GET", `/messages/${parseMessageId(messageId)}/check-download`, null, timeout);
       output(data, g.format, outOpts);
     } else if (opts.bodyOnly) {
-      const data = await api("GET", `/messages/${messageId}`, null, timeout);
+      const data = await api("GET", `/messages/${parseMessageId(messageId)}`, null, timeout);
       output(data.parts?.text || data.body || "", g.format, { ...outOpts, raw: true });
     } else {
-      const data = await api("GET", `/messages/${messageId}`, null, timeout);
+      const data = await api("GET", `/messages/${parseMessageId(messageId)}`, null, timeout);
       output(data, g.format, outOpts);
     }
   }));
@@ -338,7 +356,7 @@ program
   .option("--headers", "headers only for each message")
   .action(run(async (messageId) => {
     const g = program.opts();
-    const data = await api("GET", `/messages/${messageId}/thread`, null, getTimeout(g));
+    const data = await api("GET", `/messages/${parseMessageId(messageId)}/thread`, null, getTimeout(g));
     output(data, g.format, getOutputOpts(g));
   }));
 
@@ -486,7 +504,7 @@ program
     const g = program.opts();
     const timeout = getTimeout(g);
 
-    const msg = await api("GET", `/messages/${messageId}`, null, timeout);
+    const msg = await api("GET", `/messages/${parseMessageId(messageId)}`, null, timeout);
     let tags = msg.tags || [];
     if (opts.remove) {
       tags = tags.filter(t => t !== tag);
@@ -494,7 +512,7 @@ program
       if (!tags.includes(tag)) tags.push(tag);
     }
     const data = await api("POST", "/messages/update", {
-      messageId: parseInt(messageId),
+      messageId: parseMessageId(messageId),
       tags,
     }, timeout);
     output(data, g.format, getOutputOpts(g));
@@ -583,9 +601,10 @@ program
     }
 
     const payload = {
-      messageId: parseInt(messageId),
+      messageId: parseMessageId(messageId),
       body,
       replyAll: opts.all || false,
+      isHTML: opts.html || false,
     };
 
     if (opts.send) {
@@ -613,7 +632,7 @@ program
   .action(run(async (messageId, opts) => {
     const g = program.opts();
     const payload = {
-      messageId: parseInt(messageId),
+      messageId: parseMessageId(messageId),
       to: opts.to,
       body: opts.body || "",
     };
@@ -637,7 +656,7 @@ program
   .description("List attachments for a message")
   .action(run(async (messageId) => {
     const g = program.opts();
-    const data = await api("GET", `/messages/${messageId}/attachments`, null, getTimeout(g));
+    const data = await api("GET", `/messages/${parseMessageId(messageId)}/attachments`, null, getTimeout(g));
     output(data, g.format, getOutputOpts(g));
   }));
 
@@ -668,14 +687,14 @@ program
     };
 
     if (opts.all) {
-      const attachments = await api("GET", `/messages/${messageId}/attachments`, null, timeout);
+      const attachments = await api("GET", `/messages/${parseMessageId(messageId)}/attachments`, null, timeout);
       const dir = opts.outputDir || ".";
       mkdirSync(dir, { recursive: true });
       const results = [];
       for (const att of attachments) {
-        const data = await api("POST", `/messages/${messageId}/attachment`, { partName: att.partName }, timeout);
+        const data = await api("POST", `/messages/${parseMessageId(messageId)}/attachment`, { partName: att.partName }, timeout);
         const filePath = join(dir, safeName(att.name, att.partName));
-        writeFileSync(filePath, Buffer.from(data.data, "base64"));
+        writeFileSync(filePath, Buffer.from(data.data, "base64"), { flag: "wx", mode: 0o600 });
         results.push({ partName: att.partName, name: att.name, path: filePath });
       }
       output(results, g.format, getOutputOpts(g));
@@ -684,9 +703,9 @@ program
         outputError({ message: "Provide partName or use --all", code: "INVALID_ARGS" }, g.format);
         return;
       }
-      const data = await api("POST", `/messages/${messageId}/attachment`, { partName }, timeout);
+      const data = await api("POST", `/messages/${parseMessageId(messageId)}/attachment`, { partName }, timeout);
       if (opts.output) {
-        writeFileSync(opts.output, Buffer.from(data.data, "base64"));
+        writeFileSync(opts.output, Buffer.from(data.data, "base64"), { flag: "wx", mode: 0o600 });
         output({ saved: opts.output, size: data.size }, g.format, getOutputOpts(g));
       } else {
         output(data, g.format, getOutputOpts(g));
@@ -705,7 +724,7 @@ program
     const g = program.opts();
     const body = {};
     if (messageId) {
-      body.messageId = parseInt(messageId);
+      body.messageId = parseMessageId(messageId);
     } else if (opts.folder) {
       body.folderId = opts.folder;
       if (opts.limit) body.limit = parseInt(opts.limit);
@@ -721,7 +740,7 @@ program
   .description("Check download status of a message")
   .action(run(async (messageId) => {
     const g = program.opts();
-    const data = await api("GET", `/messages/${messageId}/download-status`, null, getTimeout(g));
+    const data = await api("GET", `/messages/${parseMessageId(messageId)}/download-status`, null, getTimeout(g));
     output(data, g.format, getOutputOpts(g));
   }));
 
@@ -777,7 +796,7 @@ program
 
 program
   .command("sync [folderId]")
-  .description("Trigger folder sync")
+  .description("Unsupported: the WebExtension API cannot trigger IMAP sync; use Thunderbird's Get Messages")
   .option("--all", "sync all folders")
   .action(run(async (folderId, opts) => {
     const g = program.opts();
@@ -795,7 +814,7 @@ program
 
 program
   .command("sync-status <folderId>")
-  .description("Check sync status of a folder")
+  .description("Read current folder counts (not IMAP sync progress)")
   .action(run(async (folderId) => {
     const g = program.opts();
     const data = await api("POST", "/sync/status", { folderId }, getTimeout(g));
@@ -815,7 +834,7 @@ bulk
     const timeout = getTimeout(g);
     const list = await api("POST", "/messages/list", {
       folderId,
-      limit: parseInt(opts.limit),
+      limit: parseCount(opts.limit, "--limit"),
       unreadOnly: true,
     }, timeout);
 
@@ -838,24 +857,19 @@ bulk
   .action(run(async (fromFolderId, toFolderId, opts) => {
     const g = program.opts();
     const timeout = getTimeout(g);
+    // Filters are applied by the extension before the limit; filtering the returned batch here
+    // would only search the first N messages in the folder.
     const list = await api("POST", "/messages/list", {
       folderId: fromFolderId,
-      limit: parseInt(opts.limit),
+      limit: parseCount(opts.limit, "--limit"),
+      ...(opts.olderThan !== undefined ? { olderThan: parseCount(opts.olderThan, "--older-than") } : {}),
+      ...(opts.from ? { from: opts.from } : {}),
+      ...(opts.subject ? { subjectPattern: opts.subject } : {}),
     }, timeout);
-
-    let toMove = list.messages || list;
-    if (opts.olderThan) {
-      const cutoff = new Date(Date.now() - parseInt(opts.olderThan) * 86400000);
-      toMove = toMove.filter(m => new Date(m.date) < cutoff);
+    if (list.bulkFiltersApplied !== true) {
+      throw Object.assign(new Error("The installed Thunderbird extension does not apply bulk filters. Update the extension before moving messages."), { code: "THUNDERBIRD_ERROR" });
     }
-    if (opts.from) {
-      const addr = opts.from.toLowerCase();
-      toMove = toMove.filter(m => (m.author || "").toLowerCase().includes(addr));
-    }
-    if (opts.subject) {
-      const pat = new RegExp(opts.subject, "i");
-      toMove = toMove.filter(m => pat.test(m.subject || ""));
-    }
+    const toMove = list.messages || [];
 
     if (toMove.length > 0) {
       const ids = toMove.map(m => m.id);
@@ -885,10 +899,10 @@ bulk
     }
     const timeout = getTimeout(g);
     const body = { folderId };
-    if (opts.olderThan) body.olderThan = parseInt(opts.olderThan);
+    if (opts.olderThan !== undefined) body.olderThan = parseCount(opts.olderThan, "--older-than");
     if (opts.from) body.from = opts.from;
     if (opts.subject) body.subject = opts.subject;
-    if (opts.limit) body.limit = parseInt(opts.limit);
+    if (opts.limit !== undefined) body.limit = parseCount(opts.limit, "--limit");
 
     const data = await api("POST", "/bulk/delete", body, timeout);
     output(data, fmt, getOutputOpts(g));
@@ -905,10 +919,10 @@ bulk
     const g = program.opts();
     const timeout = getTimeout(g);
     const body = { folderId, tagKey };
-    if (opts.olderThan) body.olderThan = parseInt(opts.olderThan);
+    if (opts.olderThan !== undefined) body.olderThan = parseCount(opts.olderThan, "--older-than");
     if (opts.from) body.from = opts.from;
     if (opts.subject) body.subject = opts.subject;
-    if (opts.limit) body.limit = parseInt(opts.limit);
+    if (opts.limit !== undefined) body.limit = parseCount(opts.limit, "--limit");
 
     const data = await api("POST", "/bulk/tag", body, timeout);
     output(data, g.format, getOutputOpts(g));
@@ -921,7 +935,7 @@ bulk
   .action(run(async (folderId, opts) => {
     const g = program.opts();
     const body = { folderId };
-    if (opts.limit) body.limit = parseInt(opts.limit);
+    if (opts.limit !== undefined) body.limit = parseCount(opts.limit, "--limit");
     const data = await api("POST", "/bulk/fetch", body, getTimeout(g));
     output(data, g.format, getOutputOpts(g));
   }));
