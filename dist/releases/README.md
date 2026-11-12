@@ -4,17 +4,19 @@ The Thunderbird extension builds users should install. Each file is the XPI retu
 addons.thunderbird.net (ATN) for self-distribution after uploading that version.
 
 **These files carry no embedded Mozilla signature** — there is no `META-INF/` directory. Each is a
-plain zip. From 2.1.1 on, `npm run build:xpi` is reproducible (fixed file order and timestamps), so
-the release file is byte-identical to a rebuild of `extension/` at the release tag. Verify what you
-install:
+plain zip of `extension/` at the release tag. Verify what you install by comparing contents, which
+works with any Node.js version:
 
 ```bash
-unzip -l thunderbird_ai_bridge-2.1.1-tb.xpi        # manifest.json, src/background.js, src/thread-utils.js
-git checkout v1.1.1 && npm ci && npm run build:xpi && cmp dist/thunderbird-cli-2.1.1.xpi dist/releases/thunderbird_ai_bridge-2.1.1-tb.xpi
+git checkout v1.1.1 && npm ci && npm run build:xpi
+mkdir -p /tmp/a /tmp/b && unzip -oq dist/thunderbird-cli-2.1.1.xpi -d /tmp/a \
+  && unzip -oq dist/releases/thunderbird_ai_bridge-2.1.1-tb.xpi -d /tmp/b && diff -r /tmp/a /tmp/b
 ```
 
-Releases up to 2.1.0 were built with file timestamps, so a rebuild matches their contents
-(`unzip` and `diff`), not their bytes.
+From 2.1.1 on, `npm run build:xpi` uses fixed file order and timestamps, so a rebuild is also
+byte-identical (`cmp`) when it runs on the same Node.js major version as the release: zlib's
+compressed output differs between Node versions. 2.1.1 was built with Node.js 24. Releases up to
+2.1.0 embed build timestamps, so only their contents match.
 
 ## Files
 
