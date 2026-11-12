@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.1] — 2026-09-15
+## [1.1.1] — 2026-11-12
 
 npm packages 1.1.1; Thunderbird extension 2.1.1.
 
@@ -36,6 +36,10 @@ npm packages 1.1.1; Thunderbird extension 2.1.1.
 - CLI: message IDs and counts are validated before any request; an HTTP-200 `{ error }` payload exits non-zero (`NOT_FOUND` where applicable); `--max-body` also truncates HTML, raw source and arrays.
 - MCP: arguments are validated against each tool's schema (integers, minimums); handler errors are flagged `isError`; `limit: 0` and size 0 are preserved; `maxBody` also truncates HTML and raw.
 - Bridge: request bodies are decoded once after all chunks arrive (a UTF-8 character split across chunks was corrupted); aborted uploads get a 400; unknown command-line flags are rejected. `npm run build:xpi` no longer writes a world-writable file.
+
+### Changed
+- HTML replies are inserted by importing parsed DOM nodes instead of assigning `innerHTML` (flagged by the ATN validator).
+- `npm run build:xpi` is reproducible (fixed entry order and timestamps): rebuilding a release tag gives a byte-identical XPI, so the published file can be checked with `cmp`.
 
 ### Security (#38)
 - `tb attachment-download --all` keeps only the last path segment of sender-supplied filenames, writes files `0600`, and never overwrites an existing file.

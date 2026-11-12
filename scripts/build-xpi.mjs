@@ -84,6 +84,12 @@ if (!existsSync(DIST_DIR)) mkdirSync(DIST_DIR, { recursive: true });
 const xpiName = `thunderbird-cli-${version}.xpi`;
 const xpiPath = join(DIST_DIR, xpiName);
 
+// Reproducible output: fixed entry order and timestamps, so anyone can rebuild a tagged
+// release and `cmp` it against the published XPI. (Built from local date parts, so the
+// DOS timestamp is the same in every time zone.)
+const FIXED_MTIME = new Date(1980, 0, 2, 0, 0, 0);
+files.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+
 const zip = new AdmZip();
 for (const f of files) {
   const data = readFileSync(f.path);
@@ -91,6 +97,7 @@ for (const f of files) {
   const zipPath = f.rel.replace(/\\/g, "/");
   // Place files at the ZIP root (no leading directory)
   zip.addFile(zipPath, data);
+  zip.getEntry(zipPath).header.time = FIXED_MTIME;
 }
 
 // AdmZip.writeZip chmods the file to 0666 (world-writable); write it with normal permissions.
