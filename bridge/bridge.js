@@ -392,7 +392,8 @@ const httpServer = createServer(async (req, res) => {
   } catch (err) {
     // Always name the failure: a timeout must never look like an empty result to a client.
     const code = err.code || "THUNDERBIRD_ERROR";
-    const status = code === "EXTENSION_DISCONNECTED" ? 503 : code === "TIMEOUT" ? 504 : 500;
+    const status = code === "EXTENSION_DISCONNECTED" ? 503 : code === "TIMEOUT" ? 504 :
+      code === "SEND_DISABLED" ? 403 : code === "NOT_FOUND" ? 404 : 500;
     res.writeHead(status);
     res.end(JSON.stringify({ error: err.message || "Unknown error", code }));
   }

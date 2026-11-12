@@ -558,7 +558,7 @@ program
   .option("--attach <name>", "attach a file from the attachments folder (repeatable; see tb attachable)", (v, acc) => [...acc, v], [])
   .option("--draft", "save as draft (default)")
   .option("--open", "open compose window")
-  .option("--send", "send immediately")
+  .option("--send", "send immediately (only if allowed in the add-on options)")
   .action(run(async (opts) => {
     const g = program.opts();
     let body = opts.body || "";
@@ -617,7 +617,7 @@ program
   .option("--attach <name>", "attach a file from the attachments folder (repeatable; see tb attachable)", (v, acc) => [...acc, v], [])
   .option("--draft", "save as draft (default)")
   .option("--open", "open compose window")
-  .option("--send", "send immediately")
+  .option("--send", "send immediately (only if allowed in the add-on options)")
   .action(run(async (messageId, opts) => {
     const g = program.opts();
     let body = opts.body || "";
@@ -658,7 +658,7 @@ program
   .option("--attach <name>", "attach a file from the attachments folder (repeatable; see tb attachable)", (v, acc) => [...acc, v], [])
   .option("--draft", "save as draft (default)")
   .option("--open", "open compose window")
-  .option("--send", "send immediately")
+  .option("--send", "send immediately (only if allowed in the add-on options)")
   .action(run(async (messageId, opts) => {
     const g = program.opts();
     const payload = {

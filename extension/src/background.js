@@ -126,8 +126,16 @@ async function handleRequest({ method, path, body }) {
   const access = await loadAccountAccess();
   const canSee = (accountId) => !access.accounts || access.accounts.has(accountId);
   if (access.accounts) await enforceAccountAccess(path, body, canSee);
+  // Send block: unless the user allowed it in the add-on options, agents only get drafts.
+  const sendPolicy = await loadSendPolicy();
+  if (body?.send === true && ["/compose", "/reply", "/forward"].includes(path) && !sendPolicy.allowSend) {
+    throw Object.assign(new Error(
+      "Sending is turned off in the Thunderbird AI Bridge options, so nothing was created or sent. " +
+      "Save a draft (mode draft) or open it for the user (mode open); the user can allow direct sending in the add-on options."
+    ), { code: "SEND_DISABLED" });
+  }
   if (path === "/access" && method === "GET") {
-    return { mode: access.mode, accounts: access.accounts ? [...access.accounts] : "all" };
+    return { mode: access.mode, accounts: access.accounts ? [...access.accounts] : "all", sendAllowed: sendPolicy.allowSend };
   }
 
   // Health

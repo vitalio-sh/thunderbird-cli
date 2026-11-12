@@ -139,6 +139,13 @@ search/recent/thread results leave them out, and compose falls back to an identi
 account. Agents cannot change this setting (no bridge route writes it). Address books are not tied
 to accounts and stay available. If the stored setting is ever unreadable, every account is blocked.
 
+## Allowing agents to send directly
+
+By default agents **cannot send**: compose/reply/forward with `send` fail with `SEND_DISABLED`,
+and agents save drafts or open a compose window for you instead. To let agents send without your
+review, tick **Allow agents to send email directly** in the same add-on Options page and Save.
+`tb account-access` shows `sendAllowed`.
+
 ## Configuration
 
 Config file location: `~/.config/thunderbird-cli/config.json`

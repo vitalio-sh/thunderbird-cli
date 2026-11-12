@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Direct sending is off by default.** Compose/reply/forward with `send` fail with `SEND_DISABLED` (HTTP 403) before anything is created, unless the user ticks "Allow agents to send email directly" in the add-on's options. Drafts and `open` mode are unaffected. Agents cannot change the setting; a malformed value keeps sending off. Users who rely on `--send` / `mode: "send"` must enable it once.
+- Bridge answers `NOT_FOUND` errors with HTTP 404 (was 500).
+
 ### Added
 - Per-account allowlist (#18): the add-on's options page in Thunderbird lets the user choose "All accounts" (default) or "Only selected". Unselected accounts are invisible on every route (accounts, identities, stats, folders, messages by ID, move destinations, search/recent/thread results, sender identity); a malformed setting fails closed. Agents cannot change it. `tb account-access` shows the setting. New `storage` permission.
 - Outgoing attachments for compose, reply and forward (#23), with a safe folder flow: files are attached **by name** from one folder (`TB_ATTACH_DIR`, default `~/thunderbird-cli-attachments`). Paths, `..`, dotfiles, symlinks and subfolders are refused (O_NOFOLLOW + realpath check), max 20 files / 25 MiB. CLI `--attach <name>` and `tb attachable`; MCP `attachments: [names]` and `email_attachments` operation `available`. Forwards keep the forwarded message attached.

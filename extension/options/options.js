@@ -1,4 +1,4 @@
-// Options page for per-account access (#18). Uses DOM APIs only (no innerHTML).
+// Options page: per-account access (#18) and the send block. Uses DOM APIs only (no innerHTML).
 
 async function render() {
   const access = await loadAccountAccess();
@@ -17,6 +17,7 @@ async function render() {
     label.append(input, ` ${account.name}${email && email !== account.name ? ` (${email})` : ""}`);
     box.append(label);
   }
+  document.getElementById("allowSend").checked = (await loadSendPolicy()).allowSend;
   if (access.mode === "invalid") {
     setStatus("The saved setting was unreadable, so all accounts were blocked. Choose and save again.");
   }
@@ -45,7 +46,10 @@ async function save() {
     }
     value = { mode: "selected", accounts };
   }
-  await messenger.storage.local.set({ [ACCOUNT_ACCESS_KEY]: value });
+  await messenger.storage.local.set({
+    [ACCOUNT_ACCESS_KEY]: value,
+    [SEND_POLICY_KEY]: { allowSend: document.getElementById("allowSend").checked },
+  });
   setStatus("Saved. Applies to the next request.");
 }
 

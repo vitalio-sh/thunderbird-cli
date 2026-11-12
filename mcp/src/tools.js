@@ -312,7 +312,7 @@ export const tools = [
         mode: {
           type: "string",
           enum: ["draft", "open", "send"],
-          description: "draft (default, saves silently), open (compose window), send (immediate)",
+          description: "draft (default, saves silently), open (compose window for the user), send (only if the user allowed direct sending in the add-on options; otherwise SEND_DISABLED, then save a draft instead)",
           default: "draft",
         },
       },
@@ -360,6 +360,7 @@ export const tools = [
         mode: {
           type: "string",
           enum: ["draft", "open", "send"],
+          description: "draft (default, saves silently), open (compose window for the user), send (only if the user allowed direct sending in the add-on options; otherwise SEND_DISABLED, then save a draft instead)",
           default: "draft",
         },
       },
@@ -402,6 +403,7 @@ export const tools = [
         mode: {
           type: "string",
           enum: ["draft", "open", "send"],
+          description: "draft (default, saves silently), open (compose window for the user), send (only if the user allowed direct sending in the add-on options; otherwise SEND_DISABLED, then save a draft instead)",
           default: "draft",
         },
       },
