@@ -5,7 +5,7 @@ compatibility: Requires Mozilla Thunderbird 128+ with the thunderbird-cli WebExt
 license: MIT
 metadata:
   author: Vitalii Ionov
-  version: 1.1.1
+  version: 1.2.0
   mcp-server: thunderbird-cli-mcp
   category: communication
   tags: [email, thunderbird, imap, smtp, mcp, productivity, localhost, privacy]
@@ -289,4 +289,4 @@ MCP tool → CLI command mapping:
 
 ## Version
 
-This skill tracks `thunderbird-cli-mcp@1.1.1`. The tool surface (12 tools, parameter names, defaults) is stable within the 1.x line. Check [CHANGELOG](https://github.com/vitalio-sh/thunderbird-cli/blob/main/CHANGELOG.md) for additions.
+This skill tracks `thunderbird-cli-mcp@1.2.0`. The tool surface (12 tools, parameter names, defaults) is stable within the 1.x line. Check [CHANGELOG](https://github.com/vitalio-sh/thunderbird-cli/blob/main/CHANGELOG.md) for additions.
