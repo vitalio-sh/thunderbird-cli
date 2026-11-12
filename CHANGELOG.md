@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-09-15
+
+npm packages 1.1.1; Thunderbird extension 2.1.1.
+
+### Fixed
+- `email_list` / `POST /messages/list` with `sort` sorted only the first `limit` messages in Thunderbird's storage order, so "newest first" could return months-old mail. The whole filtered folder is now sorted before `offset`/`limit` (#24, #15).
+- Full-text search uses Thunderbird's search index (`messages.query({ fullText })`, subject/body/author) instead of scanning bodies, which timed out on large folders. `searchMode: "body"` / `tb search --body-only` keeps the scan; responses report which mode ran (#12).
+- Timeouts are never ambiguous: the bridge answers 504 + `TIMEOUT` (was 500 without a code, surfaced as `THUNDERBIRD_ERROR`), 503 + `EXTENSION_DISCONNECTED`, 500 + `THUNDERBIRD_ERROR`; MCP `email_search` says results are unknown, not empty (#12).
+- Docs no longer claim the extension XPI is Mozilla-signed — it has no embedded signature; it is distributed via addons.thunderbird.net and is byte-identical to `extension/` (#11).
+
+### Security
+- A new WebSocket connection can no longer take over the extension slot while the connected extension answers pings (`TB_BRIDGE_WS_TAKEOVER_MS`, default 2000); it is closed with 1008 (#22).
+- Private vulnerability reporting enabled; see SECURITY.md.
+
+### Added
+- MCP `email_mark` can add, remove or replace tags (`addTags`, `removeTags`, `tags`) (#10).
+
 ## [1.1.0] — 2026-09-14
 
 npm packages `thunderbird-cli`, `thunderbird-cli-bridge`, `thunderbird-cli-mcp` 1.1.0; Thunderbird extension 2.1.0.

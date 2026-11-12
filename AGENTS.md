@@ -13,7 +13,7 @@ Four published artifacts, one architecture:
 | `thunderbird-cli` | `tb` CLI (38 commands) | `cli/` → npm: `thunderbird-cli` |
 | `thunderbird-cli-bridge` | Stateless HTTP↔WS proxy daemon | `bridge/` → npm: `thunderbird-cli-bridge` |
 | `thunderbird-cli-mcp` | MCP server (12 tools for Claude Desktop) | `mcp/` → npm: `thunderbird-cli-mcp` |
-| Thunderbird WebExtension | WS client inside Thunderbird | `extension/` → signed XPI on addons.thunderbird.net |
+| Thunderbird WebExtension | WS client inside Thunderbird | `extension/` → XPI distributed via addons.thunderbird.net (no embedded signature) |
 
 ```
 AI Agent ─→ tb CLI      ─┐
@@ -117,7 +117,7 @@ Tagging `vX.Y.Z` fires `.github/workflows/release.yml`:
 
 1. Runs all 80 tests
 2. Builds the unsigned XPI
-3. Finds the signed XPI in `dist/releases/` (must be checked in)
+3. Finds the release XPI in `dist/releases/` (the file returned by ATN; must be checked in)
 4. Creates the GitHub Release with both XPIs attached
 
 npm publish is manual (`cd cli && npm publish`) — intentionally, so a release tag without publish is a no-op you can recover from.

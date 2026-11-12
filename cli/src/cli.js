@@ -227,6 +227,7 @@ program
   .option("--size-min <bytes>", "minimum message size")
   .option("--size-max <bytes>", "maximum message size")
   .option("--include-junk", "include junk/spam messages")
+  .option("--body-only", "scan message bodies instead of Thunderbird's full-text index (slower)")
   .option("-l, --limit <n>", "max results", "25")
   .action(run(async (query, opts) => {
     const g = program.opts();
@@ -242,6 +243,7 @@ program
     if (opts.unread) body.unreadOnly = true;
     if (opts.flagged) body.flagged = true;
     if (opts.tag) body.tag = opts.tag;
+    if (opts.bodyOnly) body.searchMode = "body";
     if (opts.since) body.fromDate = parseRelativeDate(opts.since);
     if (opts.until) body.toDate = parseRelativeDate(opts.until);
     if (opts.hasAttachment) body.hasAttachment = true;

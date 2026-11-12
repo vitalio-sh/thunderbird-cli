@@ -64,6 +64,15 @@ const track = async (fn) => {
 };
 
 const store = new Map();
+const pages = new Map();
+const PAGE_SIZE = 7;
+function pageOf(all, start) {
+  const messages = all.slice(start, start + PAGE_SIZE);
+  if (start + PAGE_SIZE >= all.length) return { messages };
+  const id = `page-${start + PAGE_SIZE}`;
+  pages.set(id, async () => pageOf(all, start + PAGE_SIZE));
+  return { id, messages };
+}
 const queryHandlers = [];
 
 const messenger = {
@@ -93,8 +102,9 @@ const messenger = {
       }
       return { messages: [] };
     },
-    list: async () => ({ messages: [...store.values()].map((s) => s.header) }),
-    continueList: async () => null,
+    // Paginated like Thunderbird (small pages to exercise continueList)
+    list: async () => pageOf([...store.values()].map((s) => s.header), 0),
+    continueList: async (id) => pages.get(id)?.() ?? null,
     update: (id, props) => track(async () => { calls.update.push({ id, props }); }),
     getAttachmentFile: async () => {
       const bytes = randomBytes(100_000);
@@ -236,6 +246,20 @@ await handle("POST", "/messages/search", { headerMessageId: "<abc@host>" });
 test("headerMessageId forwarded to query without brackets", calls.query[0]?.headerMessageId === "abc@host");
 test("junk still excluded by default", calls.query[0]?.junk === false);
 
+calls.query.length = 0;
+const ft = await handle("POST", "/messages/search", { query: "invoice" });
+test("text query uses the fullText index by default", calls.query[0]?.fullText === "invoice" && calls.query[0]?.body === undefined && ft.searchMode === "fulltext");
+calls.query.length = 0;
+const bodyScan = await handle("POST", "/messages/search", { query: "invoice", searchMode: "body" });
+test("searchMode body scans bodies", calls.query[0]?.body === "invoice" && calls.query[0]?.fullText === undefined && bodyScan.searchMode === "body");
+calls.query.length = 0;
+queryHandlers.unshift((q) => { if (q.fullText) throw new Error("fullText unsupported"); });
+const fallback = await handle("POST", "/messages/search", { query: "invoice" });
+queryHandlers.shift();
+test("falls back to a body scan when fullText is unsupported", calls.query.at(-1)?.body === "invoice" && fallback.searchMode === "body");
+const filtersOnly = await handle("POST", "/messages/search", { subject: "x" });
+test("filter-only search reports no searchMode", filtersOnly.searchMode === undefined);
+
 // ─── Read batch / bulk ──────────────────────────────────────────────
 
 console.log("\n\x1b[1mBatch and bulk\x1b[0m");
@@ -262,6 +286,28 @@ calls.getRaw.length = 0;
 store.get(7).raw = undefined;
 const fetched = await handle("POST", "/bulk/fetch", { folderId: "f1", limit: 100 });
 test("bulk fetch counts successes", fetched.fetched === 39 && fetched.total === 40);
+
+// ─── List sorting (#24, #15) ────────────────────────────────────────
+
+console.log("\n\x1b[1mList sorting\x1b[0m");
+store.clear();
+// Database order is oldest → newest, so the newest messages sit on the last page.
+for (let i = 1; i <= 30; i++) {
+  store.set(i, { header: header(i, { date: new Date(Date.UTC(2026, 0, i)), read: i % 3 === 0, subject: `S${String(i).padStart(2, "0")}` }) });
+}
+const newest = await handle("POST", "/messages/list", { folderId: "f1", limit: 3, sort: "date", sortOrder: "desc" });
+test("sort=date desc returns the true newest messages across pages", JSON.stringify(newest.messages.map((m) => m.id)) === "[30,29,28]", JSON.stringify(newest.messages.map((m) => m.id)));
+test("sorted page reports hasMore", newest.hasMore === true && newest.total === 3);
+const next = await handle("POST", "/messages/list", { folderId: "f1", limit: 3, offset: 3, sort: "date", sortOrder: "desc" });
+test("offset applies after sorting", JSON.stringify(next.messages.map((m) => m.id)) === "[27,26,25]", JSON.stringify(next.messages.map((m) => m.id)));
+const oldest = await handle("POST", "/messages/list", { folderId: "f1", limit: 2, sort: "date", sortOrder: "asc" });
+test("sort=date asc returns the oldest", JSON.stringify(oldest.messages.map((m) => m.id)) === "[1,2]");
+const unreadNewest = await handle("POST", "/messages/list", { folderId: "f1", limit: 2, sort: "date", sortOrder: "desc", unreadOnly: true });
+test("filters apply before sorting", JSON.stringify(unreadNewest.messages.map((m) => m.id)) === "[29,28]", JSON.stringify(unreadNewest.messages.map((m) => m.id)));
+const lastPage = await handle("POST", "/messages/list", { folderId: "f1", limit: 5, offset: 28, sort: "subject", sortOrder: "asc" });
+test("last sorted page has hasMore=false", lastPage.messages.length === 2 && lastPage.hasMore === false);
+const unsorted = await handle("POST", "/messages/list", { folderId: "f1", limit: 3 });
+test("without sort, listing keeps database order and paging", JSON.stringify(unsorted.messages.map((m) => m.id)) === "[1,2,3]" && unsorted.hasMore === true);
 
 // ─── Attachment ─────────────────────────────────────────────────────
 

@@ -65,8 +65,14 @@ tb search <query> [options]
   --size-min <bytes>       # minimum message size
   --size-max <bytes>       # maximum message size
   --include-junk           # include junk (excluded by default)
+  --body-only              # scan message bodies instead of the full-text index (slower)
   -l, --limit <n>          # max results (default: 25)
 ```
+
+The text query uses Thunderbird's full-text index (subject, body and author), which is fast on
+large mailboxes but needs **Settings → General → Enable Global Search and Indexer** turned on.
+`--body-only` scans message bodies directly and can time out on big folders. A timeout is
+always reported as an error with code `TIMEOUT` — never as zero results.
 
 ## List Messages
 
@@ -246,7 +252,7 @@ Config file: `~/.config/thunderbird-cli/config.json`
 |------|---------|
 | `BRIDGE_UNREACHABLE` | Bridge is not running |
 | `EXTENSION_DISCONNECTED` | Thunderbird extension not connected |
-| `TIMEOUT` | Request timed out (30s default) |
+| `TIMEOUT` | Request timed out (30s default) — the result is unknown, not empty |
 | `NOT_FOUND` | Message/folder/account not found |
 | `INVALID_ARGS` | Bad arguments or missing `--confirm` |
 | `THUNDERBIRD_ERROR` | Error from Thunderbird messenger API |

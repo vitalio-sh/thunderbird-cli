@@ -44,11 +44,11 @@ nohup node bridge/bridge.js > ~/.tb-bridge.log 2>&1 &
 
 ## Step 2: Install the Thunderbird Extension
 
-### Option A: Signed XPI (recommended for normal use)
+### Option A: Release XPI (recommended for normal use)
 
-The extension is signed by Mozilla through addons.thunderbird.net for self-distribution. It installs permanently and survives Thunderbird restarts.
+Each extension version is uploaded to addons.thunderbird.net for self-distribution, and the file ATN returns is published in GitHub Releases and `dist/releases/`.
 
-1. Download the latest signed XPI from one of these locations:
+1. Download the latest release XPI from one of these locations:
    - **GitHub Releases:** https://github.com/vitalio-sh/thunderbird-cli/releases/latest
    - **Directly from `main`:** [`dist/releases/thunderbird_ai_bridge-2.1.0-tb.xpi`](../dist/releases/thunderbird_ai_bridge-2.1.0-tb.xpi)
 2. Open Thunderbird → **Add-ons and Themes**
@@ -57,7 +57,7 @@ The extension is signed by Mozilla through addons.thunderbird.net for self-distr
 5. Confirm when Thunderbird asks to install
 6. Check the bridge terminal — you should see: `[bridge] Extension connected`
 
-> The signed XPI is byte-identical to the source in `extension/`, but Mozilla's trust registry marks it as verified. You **must** use the XPI downloaded from ATN (or our GitHub Releases) — a locally-built XPI won't install permanently.
+> The XPI contains **no embedded Mozilla signature** (there is no `META-INF/` directory). It is a plain zip that is byte-identical to `extension/` at the release tag, so you can check exactly what you install: `unzip -l thunderbird_ai_bridge-*.xpi` and compare the files with the repository.
 
 ### Option B: Temporary add-on (for developers making changes)
 
