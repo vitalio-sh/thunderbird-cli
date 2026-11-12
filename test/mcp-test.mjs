@@ -558,6 +558,29 @@ console.log("\n\x1b[1mError handling\x1b[0m");
 const unknownTool = await client.callTool("nonexistent_tool", {});
 test("unknown tool returns error", unknownTool, (r) => r.error?.includes("Unknown tool"));
 
+console.log("\n\x1b[1mArgument validation\x1b[0m");
+test(
+  "string messageId rejected by schema",
+  await client.callTool("email_read", { messageId: "1/../../compose" }),
+  (r) => r.code === "INVALID_ARGS" && /integer/.test(r.error)
+);
+test(
+  "negative limit rejected by schema",
+  await client.callTool("email_search", { query: "x", limit: -1 }),
+  (r) => r.code === "INVALID_ARGS"
+);
+const handlerError = await client.send("tools/call", {
+  name: "email_attachments", arguments: { messageId: 1, operation: "download" },
+});
+test("handler error results are flagged isError", handlerError.result, (r) => r?.isError === true);
+const okCall = await client.send("tools/call", { name: "email_stats", arguments: {} });
+test("successful results are not flagged isError", okCall.result, (r) => r?.isError === false);
+test(
+  "maxBody also truncates HTML",
+  await client.callTool("email_read", { messageId: 1, mode: "full", maxBody: 3 }),
+  (r) => (r.parts?.htmlTruncated === true && r.parts.html.startsWith("<p>\n...[truncated]"))
+);
+
 // Summary
 console.log(`\n\x1b[1m${"─".repeat(40)}\x1b[0m`);
 console.log(

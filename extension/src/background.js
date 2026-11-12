@@ -59,7 +59,7 @@ function connect() {
     } catch (err) {
       socket.send(JSON.stringify({
         id: request.id,
-        error: { message: err.message, stack: err.stack },
+        error: { message: err.message, code: err.code, stack: err.stack },
       }));
     }
   };
@@ -108,6 +108,19 @@ if (typeof messenger !== "undefined" && messenger.idle?.onStateChanged) {
 // ─── Request Router ─────────────────────────────────────────────────
 
 async function handleRequest({ method, path, body }) {
+  if (body != null) {
+    if (typeof body !== "object" || Array.isArray(body)) throw invalidArgs("body must be an object");
+    for (const key of ["send", "draft", "open", "isHTML", "replyAll", "read", "flagged", "junk",
+      "unreadOnly", "hasAttachment", "includeJunk"]) {
+      if (body[key] !== undefined && typeof body[key] !== "boolean") throw invalidArgs(`${key} must be boolean`);
+    }
+    const validId = (id) => Number.isSafeInteger(id) && id > 0;
+    if ((body.messageId !== undefined && !validId(body.messageId)) ||
+        (body.messageIds !== undefined && (!Array.isArray(body.messageIds) || !body.messageIds.every(validId)))) {
+      throw invalidArgs("message IDs must be positive integers");
+    }
+  }
+
   // Health
   if (path === "/health") {
     return { status: "ok", version: messenger.runtime.getManifest().version, thunderbird: true };
@@ -165,8 +178,7 @@ async function handleRequest({ method, path, body }) {
     const { folderId } = body || {};
     const folder = await messenger.folders.get(folderId, false);
     if (!folder) return { error: "Folder not found" };
-    let info = {};
-    try { info = await messenger.folders.getFolderInfo(folder); } catch {}
+    const info = folder.isRoot ? {} : await messenger.folders.getFolderInfo(folder);
     return {
       id: folder.id, name: folder.name, path: folder.path, type: folder.type,
       unreadMessageCount: info.unreadMessageCount || 0,
@@ -222,6 +234,13 @@ async function handleRequest({ method, path, body }) {
     if (folderId) q.folderId = folderId;
     if (hasAttachment) q.attachment = true;
     if (!includeJunk) q.junk = false;
+    // Native filters run before the limit; filtering the returned page afterwards misses matches.
+    if (tag) q.tags = { mode: "all", tags: { [tag]: true } };
+    if (sizeMin != null || sizeMax != null) {
+      q.size = {};
+      if (sizeMin != null) q.size.min = sizeMin;
+      if (sizeMax != null) q.size.max = sizeMax;
+    }
 
     let result;
     try {
@@ -235,18 +254,6 @@ async function handleRequest({ method, path, body }) {
       result = await collectMessages(() => messenger.messages.query(q), limit);
     }
     if (mode) result.searchMode = mode;
-
-    // Client-side filtering for tag, sizeMin, sizeMax
-    if (tag || sizeMin || sizeMax) {
-      result.messages = result.messages.filter((msg) => {
-        if (tag && !(msg.tags || []).includes(tag)) return false;
-        if (sizeMin && (msg.size || 0) < sizeMin) return false;
-        if (sizeMax && (msg.size || 0) > sizeMax) return false;
-        return true;
-      });
-      result.total = result.messages.length;
-    }
-
     return result;
   }
 
@@ -257,30 +264,23 @@ async function handleRequest({ method, path, body }) {
             offset = 0, sort, sortOrder = "desc", flagged } = body || {};
     const folder = await messenger.folders.get(folderId, false);
     if (!folder) return { error: "Folder not found" };
-    const filters = { unreadOnly, flaggedOnly: flagged || false };
-
-    if (!sort) {
-      return await collectMessages(
-        () => messenger.messages.list(folder), limit, { ...filters, offset }
-      );
-    }
-
     // Thunderbird lists messages in database order, not by date, so sorting has to see the
     // whole (filtered) folder before offset/limit are applied — otherwise the "newest" page
-    // is just the first N messages re-ordered.
-    const all = await collectMessages(
-      () => messenger.messages.list(folder), Infinity, { ...filters, offset: 0 }
-    );
+    // is just the first N messages re-ordered. collectMessages does that when given `compare`.
     const dir = sortOrder === "asc" ? 1 : -1;
-    all.messages.sort((a, b) => {
+    const compare = sort ? (a, b) => {
       if (sort === "date") return dir * (new Date(a.date) - new Date(b.date));
       if (sort === "from") return dir * (a.author || "").localeCompare(b.author || "");
       if (sort === "subject") return dir * (a.subject || "").localeCompare(b.subject || "");
       if (sort === "size") return dir * ((a.size || 0) - (b.size || 0));
       return 0;
-    });
-    const messages = all.messages.slice(offset, offset + limit);
-    return { messages, total: messages.length, offset, hasMore: offset + limit < all.messages.length };
+    } : null;
+    const result = await collectMessages(
+      () => messenger.messages.list(folder), limit,
+      { unreadOnly, flaggedOnly: flagged || false, offset, compare, accept: bulkMessageFilter(body || {}) }
+    );
+    // Lets `tb bulk move` refuse to run against an older add-on that ignores the filters.
+    return { ...result, bulkFiltersApplied: true };
   }
 
   // ─── Read batch ─────────────────────────────────────────────────
@@ -309,7 +309,7 @@ async function handleRequest({ method, path, body }) {
     }
     if (body.folderId) {
       const folder = await messenger.folders.get(body.folderId, false);
-      const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
+      const result = await collectMessages(() => messenger.messages.list(folder), body.limit ?? 100);
       const fetched = await fetchRawAll(result.messages);
       return { fetched, total: result.messages.length };
     }
@@ -390,47 +390,28 @@ async function handleRequest({ method, path, body }) {
     return { ...formatMessage(msg), parts };
   }
 
-  // Check download state
-  const checkDlMatch = path.match(/^\/messages\/(\d+)\/check-download$/);
-  if (checkDlMatch && method === "GET") {
-    const msgId = parseInt(checkDlMatch[1]);
+  // Download state: retrieve the message (errors propagate), then read Thunderbird's own
+  // partial-message flag. An empty or attachment-only body is not "headers only".
+  const downloadMatch = path.match(/^\/messages\/(\d+)\/(check-download|download-status)$/);
+  if (downloadMatch && method === "GET") {
+    const msgId = parseInt(downloadMatch[1]);
+    await messenger.messages.getFull(msgId);
     const msg = await messenger.messages.get(msgId);
-    let downloadState = "unknown";
-    try {
-      const full = await messenger.messages.getFull(msgId);
-      const parts = extractParts(full);
-      downloadState = (parts.text || parts.html) ? "full" : "headers_only";
-    } catch {
-      downloadState = "headers_only";
+    const downloadState = msg.headersOnly ? "headers_only" : "full";
+    if (downloadMatch[2] === "download-status") {
+      return { state: downloadState, size: msg.size };
     }
     return {
       id: msg.id, downloadState, size: msg.size,
       hasBody: downloadState === "full",
-      hasAttachments: false,
+      hasAttachments: (await messenger.messages.listAttachments(msgId)).length > 0,
     };
   }
 
-  // Download status
-  const dlStatusMatch = path.match(/^\/messages\/(\d+)\/download-status$/);
-  if (dlStatusMatch && method === "GET") {
-    const msgId = parseInt(dlStatusMatch[1]);
-    const msg = await messenger.messages.get(msgId);
-    let state = "headers_only";
-    try {
-      const full = await messenger.messages.getFull(msgId);
-      const parts = extractParts(full);
-      if (parts.text || parts.html) state = "full";
-    } catch { /* headers_only */ }
-    return { state, size: msg.size };
-  }
-
-  // Attachments list
+  // Attachments list (native metadata; includes text/* attachments)
   const attachmentsMatch = path.match(/^\/messages\/(\d+)\/attachments$/);
   if (attachmentsMatch && method === "GET") {
-    const msgId = parseInt(attachmentsMatch[1]);
-    const full = await messenger.messages.getFull(msgId);
-    const parts = extractParts(full);
-    return parts.attachments;
+    return await messenger.messages.listAttachments(parseInt(attachmentsMatch[1]));
   }
 
   // Download specific attachment
@@ -475,15 +456,15 @@ async function handleRequest({ method, path, body }) {
     const add = (m, threadMatch) => {
       if (seen.has(m.id)) return;
       seen.add(m.id);
-      thread.push({ ...formatMessage(m), threadMatch });
+      thread.push({ ...m, threadMatch }); // already formatted by collectMessages
     };
 
     // Upstream: every message named in References / In-Reply-To
     const pages = await mapWithIpcLimit([...ids], async (hdrId) => {
       try {
-        return (await messenger.messages.query({ headerMessageId: hdrId }))?.messages || [];
-      } catch {
-        return [];
+        return (await collectMessages(() => messenger.messages.query({ headerMessageId: hdrId }), Infinity)).messages;
+      } catch (error) {
+        throw new Error(`Thread lookup failed: ${error.message}`);
       }
     });
     for (const messages of pages) messages.forEach((m) => add(m, "references"));
@@ -493,12 +474,15 @@ async function handleRequest({ method, path, body }) {
     // heuristic, so they are labelled and junk is excluded.
     const norm = normalizeSubject(msg?.subject || "");
     if (norm) {
+      let r;
       try {
-        const r = await messenger.messages.query({ subject: norm, junk: false });
-        for (const m of r?.messages || []) {
-          if (normalizeSubject(m.subject || "").toLowerCase() === norm.toLowerCase()) add(m, "subject");
-        }
-      } catch {}
+        r = await collectMessages(() => messenger.messages.query({ subject: norm, junk: false }), Infinity);
+      } catch (error) {
+        throw new Error(`Thread subject lookup failed: ${error.message}`);
+      }
+      for (const m of r.messages) {
+        if (normalizeSubject(m.subject || "").toLowerCase() === norm.toLowerCase()) add(m, "subject");
+      }
     }
 
     thread.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -541,7 +525,7 @@ async function handleRequest({ method, path, body }) {
     if (isHTML) { details.isPlainText = false; details.body = msgBody; }
     else { details.isPlainText = true; details.plainTextBody = msgBody; }
     if (identityId) details.identityId = identityId;
-    if (priority) details.customHeaders = [{ name: "X-Priority", value: priorityToValue(priority) }];
+    if (priority) details.priority = priority;
     const tab = await messenger.compose.beginNew(null, details);
     if (send) {
       await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
@@ -559,12 +543,36 @@ async function handleRequest({ method, path, body }) {
   // ─── Reply ──────────────────────────────────────────────────────
 
   if (path === "/reply" && method === "POST") {
-    const { messageId, body: replyBody, replyAll = false,
+    const { messageId, body: replyBody = "", replyAll = false, isHTML = false,
             send = false, draft = false, open = false } = body;
+    if (!Number.isSafeInteger(messageId) || typeof replyBody !== "string") {
+      throw invalidArgs("positive messageId and string body required");
+    }
     const type = replyAll ? "replyToAll" : "replyToSender";
-    const tab = await messenger.compose.beginReply(messageId, type, {
-      isPlainText: true, plainTextBody: replyBody,
-    });
+    // Open the native reply first so Thunderbird builds the quotation, then prepend our text.
+    // Passing a body to beginReply replaces the whole body and drops the quote.
+    const tab = await messenger.compose.beginReply(messageId, type, isHTML ? { isPlainText: false } : {});
+    try {
+      const original = await messenger.compose.getComposeDetails(tab.id);
+      if (!original.isPlainText) {
+        const doc = new DOMParser().parseFromString(original.body || "", "text/html");
+        const intro = doc.createElement("div");
+        if (isHTML) intro.innerHTML = replyBody;
+        else for (const paragraph of replyBody.trim().split(/\n\s*\n/)) {
+          const p = doc.createElement("p");
+          p.textContent = paragraph.replace(/\s*\n\s*/g, " ");
+          intro.append(p);
+        }
+        doc.body.prepend(intro);
+        await messenger.compose.setComposeDetails(tab.id, { body: doc.documentElement.outerHTML });
+      } else {
+        await messenger.compose.setComposeDetails(tab.id, {
+          plainTextBody: replyBody + "\n\n" + (original.plainTextBody || ""),
+        });
+      }
+    } catch (error) {
+      throw new Error(`Reply tab ${tab.id} is open but preparation failed; inspect it before retrying: ${error.message}`);
+    }
     if (send) {
       await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
       return { success: true, action: "sent" };
@@ -652,9 +660,8 @@ async function handleRequest({ method, path, body }) {
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
     const result = await collectMessages(
       () => messenger.messages.query({ fromDate: since }), limit,
-      { unreadOnly, accountId: accountId || null }
+      { unreadOnly, accountId: accountId || null, compare: (a, b) => new Date(b.date) - new Date(a.date) }
     );
-    result.messages.sort((a, b) => new Date(b.date) - new Date(a.date));
     result.since = since.toISOString();
     return result;
   }
@@ -712,26 +719,16 @@ async function handleRequest({ method, path, body }) {
   // ─── Sync ───────────────────────────────────────────────────────
 
   if (path === "/sync" && method === "POST") {
-    if (body && body.all) {
-      const accounts = await messenger.accounts.list(true);
-      for (const acct of accounts) {
-        if (acct.rootFolder) await messenger.folders.getSubFolders(acct.rootFolder, false);
-      }
-      return { success: true, synced: "all" };
-    }
-    if (body && body.folderId) {
-      const folder = await messenger.folders.get(body.folderId, false);
-      await messenger.folders.getSubFolders(folder, false);
-      return { success: true, synced: body.folderId };
-    }
-    return { error: "Provide folderId or all: true" };
+    // getSubFolders() only enumerates folders; there is no WebExtension API to trigger IMAP sync.
+    throw new Error("Manual sync required: this connector cannot trigger IMAP sync; use Thunderbird's Get Messages command");
   }
 
   if (path === "/sync/status" && method === "POST") {
     const folder = await messenger.folders.get(body.folderId, false);
+    const info = await messenger.folders.getFolderInfo(folder);
     return {
-      folderId: folder.id, totalMessages: folder.totalMessageCount,
-      unread: folder.unreadMessageCount, type: folder.type, name: folder.name,
+      folderId: folder.id, totalMessages: info.totalMessageCount,
+      unread: info.unreadMessageCount, type: folder.type, name: folder.name,
     };
   }
 
@@ -739,8 +736,9 @@ async function handleRequest({ method, path, body }) {
 
   if (path === "/bulk/delete" && method === "POST") {
     const folder = await messenger.folders.get(body.folderId, false);
-    const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
-    const filtered = filterBulkMessages(result.messages, body);
+    const result = await collectMessages(() => messenger.messages.list(folder), body.limit ?? 100,
+      { accept: bulkMessageFilter(body) });
+    const filtered = result.messages;
     if (filtered.length > 0) {
       await messenger.messages.delete(filtered.map((m) => m.id), false);
     }
@@ -749,9 +747,11 @@ async function handleRequest({ method, path, body }) {
 
   if (path === "/bulk/tag" && method === "POST") {
     const folder = await messenger.folders.get(body.folderId, false);
-    const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
-    const toTag = filterBulkMessages(result.messages, body)
-      .filter((msg) => !(msg.tags || []).includes(body.tagKey));
+    const matches = bulkMessageFilter(body);
+    // Skip already-tagged messages before the limit, or they would use up the batch.
+    const result = await collectMessages(() => messenger.messages.list(folder), body.limit ?? 100,
+      { accept: (msg) => matches(msg) && !(msg.tags || []).includes(body.tagKey) });
+    const toTag = result.messages;
     await mapWithIpcLimit(toTag, (msg) =>
       messenger.messages.update(msg.id, { tags: [...(msg.tags || []), body.tagKey] })
     );
@@ -760,7 +760,7 @@ async function handleRequest({ method, path, body }) {
 
   if (path === "/bulk/fetch" && method === "POST") {
     const folder = await messenger.folders.get(body.folderId, false);
-    const result = await collectMessages(() => messenger.messages.list(folder), body.limit || 100);
+    const result = await collectMessages(() => messenger.messages.list(folder), body.limit ?? 100);
     const fetched = await fetchRawAll(result.messages);
     return { success: true, fetched, total: result.messages.length };
   }
@@ -796,6 +796,14 @@ function formatMessage(msg) {
 function extractParts(part, result = { text: "", html: "", attachments: [] }) {
   if (!part) return result;
   const ct = (part.contentType || "").toLowerCase();
+  // A named or Content-Disposition: attachment part is an attachment even if it is text/*.
+  const isAttachment = part.name ||
+    part.headers?.["content-disposition"]?.some((value) => /^attachment\b/i.test(value));
+  if (isAttachment && part.partName) {
+    result.attachments.push({ name: part.name || "unnamed", contentType: ct,
+      partName: part.partName, size: part.size });
+    return result;
+  }
   if (ct === "text/plain" && part.body) result.text += part.body;
   else if (ct === "text/html" && part.body) result.html += part.body;
   else if (part.name || (ct && !ct.startsWith("multipart/"))) {
@@ -811,8 +819,8 @@ function extractParts(part, result = { text: "", html: "", attachments: [] }) {
 }
 
 async function flattenFolders(folder, depth = 0) {
-  let info = {};
-  try { info = await messenger.folders.getFolderInfo(folder); } catch {}
+  // Account roots are containers; Thunderbird rejects count requests for them.
+  const info = folder.isRoot ? {} : await messenger.folders.getFolderInfo(folder);
   const result = [{
     id: folder.id, name: folder.name, path: folder.path,
     type: folder.type,
@@ -830,8 +838,7 @@ async function flattenFolders(folder, depth = 0) {
 
 async function countFolder(folder, stats) {
   stats.folders++;
-  let info = {};
-  try { info = await messenger.folders.getFolderInfo(folder); } catch {}
+  const info = folder.isRoot ? {} : await messenger.folders.getFolderInfo(folder);
   stats.unreadTotal += info.unreadMessageCount || 0;
   stats.messageTotal += info.totalMessageCount || 0;
   if (folder.subFolders) {
@@ -839,46 +846,76 @@ async function countFolder(folder, stats) {
   }
 }
 
-async function collectMessages(queryFn, limit, { unreadOnly = false, flaggedOnly = false, offset = 0, accountId = null } = {}) {
+/**
+ * Walk Thunderbird's paged message list, applying filters before offset/limit.
+ * Without `compare`, stops at the first match past `limit` (proving hasMore) and aborts the
+ * native list. With `compare`, collects every match, sorts, then pages.
+ */
+async function collectMessages(queryFn, limit, { unreadOnly = false, flaggedOnly = false, offset = 0,
+  accountId = null, compare = null, accept = null } = {}) {
+  if ((limit !== Infinity && (!Number.isSafeInteger(limit) || limit < 0)) ||
+      !Number.isSafeInteger(offset) || offset < 0) {
+    throw invalidArgs("limit and offset must be nonnegative integers");
+  }
   let page = await queryFn();
   const messages = [];
   let skipped = 0;
-  while (page && messages.length < limit) {
-    for (const msg of page.messages) {
-      if (unreadOnly && msg.read) continue;
-      if (flaggedOnly && !msg.flagged) continue;
-      if (accountId && msg.folder?.accountId !== accountId) continue;
-      if (skipped < offset) { skipped++; continue; }
-      messages.push(formatMessage(msg));
-      if (messages.length >= limit) break;
-    }
-    if (page.id && messages.length < limit) {
+  let failed = false;
+  try {
+    while (page) {
+      for (const msg of page.messages || []) {
+        if (unreadOnly && msg.read) continue;
+        if (flaggedOnly && !msg.flagged) continue;
+        if (accountId && msg.folder?.accountId !== accountId) continue;
+        if (accept && !accept(msg)) continue;
+        if (!compare && skipped < offset) { skipped++; continue; }
+        // One extra matching message proves more exist, even inside the final page.
+        if (!compare && messages.length >= limit) {
+          return { messages, total: messages.length, offset, hasMore: true };
+        }
+        messages.push(formatMessage(msg));
+      }
+      if (!page.id) break;
       page = await messenger.messages.continueList(page.id);
-    } else break;
+    }
+    if (compare) messages.sort(compare);
+    const selected = compare ? messages.slice(offset, offset + limit) : messages;
+    return { messages: selected, total: selected.length, offset,
+      hasMore: !!compare && messages.length > offset + limit };
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    // Release Thunderbird's list if we stopped early or failed mid-way.
+    if (page?.id) {
+      try {
+        await messenger.messages.abortList(page.id);
+      } catch (error) {
+        if (!failed) throw error;
+        console.error("[tb-ai] Failed to abort message list after pagination error:", error.message);
+      }
+    }
   }
-  return { messages, total: messages.length, offset, hasMore: !!page?.id };
 }
 
-function filterBulkMessages(messages, filters) {
-  let result = messages;
-  if (filters.olderThan) {
-    const cutoff = new Date(Date.now() - parseInt(filters.olderThan) * 86400000);
-    result = result.filter((m) => new Date(m.date) < cutoff);
+/** Predicate for bulk filters (olderThan days, from substring, subject substring, subjectPattern regex). */
+function bulkMessageFilter(filters) {
+  if (filters.olderThan !== undefined &&
+      (!Number.isSafeInteger(filters.olderThan) || filters.olderThan < 0)) {
+    throw invalidArgs("olderThan must be a nonnegative integer");
   }
-  if (filters.from) {
-    const from = filters.from.toLowerCase();
-    result = result.filter((m) => (m.author || "").toLowerCase().includes(from));
-  }
-  if (filters.subject) {
-    const subj = filters.subject.toLowerCase();
-    result = result.filter((m) => (m.subject || "").toLowerCase().includes(subj));
-  }
-  return result;
+  const cutoff = filters.olderThan === undefined ? null : Date.now() - filters.olderThan * 86400000;
+  const from = filters.from?.toLowerCase();
+  const subject = filters.subject?.toLowerCase();
+  const pattern = filters.subjectPattern === undefined ? null : new RegExp(filters.subjectPattern, "i");
+  return (msg) => (cutoff === null || new Date(msg.date).getTime() < cutoff) &&
+    (!from || (msg.author || "").toLowerCase().includes(from)) &&
+    (!subject || (msg.subject || "").toLowerCase().includes(subject)) &&
+    (!pattern || pattern.test(msg.subject || ""));
 }
 
-function priorityToValue(priority) {
-  const map = { highest: "1", high: "2", normal: "3", low: "4", lowest: "5" };
-  return map[priority] || "3";
+function invalidArgs(message) {
+  return Object.assign(new Error(`INVALID_ARGS: ${message}`), { code: "INVALID_ARGS" });
 }
 
 function bytesToBase64(bytes) {

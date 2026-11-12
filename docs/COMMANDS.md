@@ -187,9 +187,9 @@ tb fetch <messageId>                      # force download from IMAP
 tb fetch --folder <folderId> --limit <n>  # batch fetch
 tb download-status <messageId>            # check: full | headers_only
 
-tb sync <folderId>                        # trigger folder sync
-tb sync --all                             # sync all accounts
-tb sync-status <folderId>                 # check sync status
+tb sync-status <folderId>                 # current folder counts (not IMAP sync progress)
+# `tb sync` returns an error: the WebExtension API cannot trigger IMAP sync.
+# Use Thunderbird's Get Messages instead.
 ```
 
 ## Contacts

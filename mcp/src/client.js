@@ -115,10 +115,13 @@ export async function api(method, path, body = null, timeout = 30000) {
   }
 
   const data = await res.json();
-  if (res.status >= 400) {
-    const err = new Error(data.error || `HTTP ${res.status}`);
-    err.code =
-      data.code || (res.status === 503 ? "EXTENSION_DISCONNECTED" : "THUNDERBIRD_ERROR");
+  // The extension reports some failures (e.g. "Folder not found") as a 200 with an `error`
+  // field; those must not be printed as a successful result.
+  if (res.status >= 400 || (data && !Array.isArray(data) && typeof data === "object" && data.error)) {
+    const err = new Error(data?.error || `HTTP ${res.status}`);
+    err.code = data?.code ||
+      (res.status === 503 ? "EXTENSION_DISCONNECTED"
+        : /not found/i.test(data?.error || "") ? "NOT_FOUND" : "THUNDERBIRD_ERROR");
     throw err;
   }
   return data;

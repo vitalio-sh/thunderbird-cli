@@ -11,7 +11,7 @@
  */
 
 import AdmZip from "adm-zip";
-import { readFileSync, mkdirSync, existsSync, statSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "fs";
 import { join, dirname, relative } from "path";
 import { fileURLToPath } from "url";
 import { readdirSync } from "fs";
@@ -93,7 +93,8 @@ for (const f of files) {
   zip.addFile(zipPath, data);
 }
 
-zip.writeZip(xpiPath);
+// AdmZip.writeZip chmods the file to 0666 (world-writable); write it with normal permissions.
+writeFileSync(xpiPath, zip.toBuffer(), { mode: 0o644 });
 
 const finalSize = statSync(xpiPath).size;
 console.log(`\n✓ Built ${xpiName}`);

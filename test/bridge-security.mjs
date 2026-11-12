@@ -242,6 +242,34 @@ await withBridge({ TB_BRIDGE_MAX_BODY: "1024" }, async () => {
   test("oversized request body → 413", huge, 413);
 });
 
+// ─── HTTP: UTF-8 split across chunks ────────────────────────────────
+
+console.log("\n\x1b[1mRequest body decoding\x1b[0m");
+await withBridge({}, async () => {
+  const ws = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
+  await new Promise((r) => ws.on("open", r));
+  ws.on("message", (d) => {
+    const msg = JSON.parse(d.toString());
+    ws.send(JSON.stringify({ id: msg.id, result: { body: msg.body } }));
+  });
+  await sleep(50);
+  const text = JSON.stringify({ body: "Gr\u00fc\u00dfe" });
+  const bytes = Buffer.from(text);
+  const split = bytes.indexOf(Buffer.from("\u00fc")) + 1; // inside the two-byte "ü"
+  const echoed = await new Promise((resolve) => {
+    const req = request({ host: "127.0.0.1", port: PORT, method: "POST", path: "/compose",
+      headers: { "Content-Type": "application/json" } }, (res) => {
+      let out = "";
+      res.on("data", (c) => (out += c));
+      res.on("end", () => resolve(JSON.parse(out)));
+    });
+    req.write(bytes.subarray(0, split));
+    setTimeout(() => req.end(bytes.subarray(split)), 50);
+  });
+  test("UTF-8 character split across chunks survives", echoed?.body?.body, "Gr\u00fc\u00dfe");
+  ws.close();
+});
+
 // ─── WebSocket heartbeat ────────────────────────────────────────────
 
 console.log("\n\x1b[1mHeartbeat\x1b[0m");

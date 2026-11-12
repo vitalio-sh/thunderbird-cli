@@ -32,6 +32,16 @@ import { isIP } from "net";
 import { WebSocketServer } from "ws";
 import { randomUUID, timingSafeEqual } from "crypto";
 
+// Refuse unknown flags rather than silently ignoring them (e.g. a misremembered --read-only).
+for (let i = 2; i < process.argv.length; i += 2) {
+  const flag = process.argv[i], value = process.argv[i + 1] || "";
+  if (!["--port", "--ws-port"].includes(flag) || !/^\d+$/.test(value) ||
+      Number(value) < 1 || Number(value) > 65535) {
+    console.error("[bridge] Supported arguments: --port <1-65535> --ws-port <1-65535>");
+    process.exit(1);
+  }
+}
+
 const HTTP_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--port") || "7700");
 const WS_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--ws-port") || "7701");
 const DEFAULT_TIMEOUT = parseInt(process.env.TB_BRIDGE_TIMEOUT || "120000");
@@ -192,6 +202,7 @@ wss.on("connection", (ws) => {
 
 function attachExtension(ws) {
   console.log("[bridge] Extension connected");
+  ws.on("error", (err) => console.error("[bridge] Extension socket error:", err.message));
   extensionSocket = ws;
 
   ws.on("message", (data) => {
@@ -326,21 +337,32 @@ const httpServer = createServer(async (req, res) => {
 
   // Read body
   // Capped: an unbounded read lets any local caller grow the heap until the daemon dies.
-  let body = "";
+  // Collect bytes and decode once: a UTF-8 character can span two network chunks.
+  const chunks = [];
   let received = 0;
-  for await (const chunk of req) {
-    received += chunk.length;
-    if (received > MAX_BODY_BYTES) {
-      // Answer first, then drop the connection; destroying it up front truncates the reply.
-      res.writeHead(413, { Connection: "close" });
-      res.end(
-        JSON.stringify({ error: `Request body exceeds ${MAX_BODY_BYTES} bytes`, code: "INVALID_ARGS" }),
-        () => req.socket?.destroy()
-      );
-      return;
+  try {
+    for await (const chunk of req) {
+      received += chunk.length;
+      if (received > MAX_BODY_BYTES) {
+        // Answer first, then drop the connection; destroying it up front truncates the reply.
+        res.writeHead(413, { Connection: "close" });
+        res.end(
+          JSON.stringify({ error: `Request body exceeds ${MAX_BODY_BYTES} bytes`, code: "INVALID_ARGS" }),
+          () => req.socket?.destroy()
+        );
+        return;
+      }
+      chunks.push(chunk);
     }
-    body += chunk;
+  } catch {
+    // Client aborted mid-upload; nothing to forward.
+    if (!res.destroyed && !res.headersSent) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: "Incomplete request body", code: "INVALID_ARGS" }));
+    }
+    return;
   }
+  const body = Buffer.concat(chunks, received).toString("utf8");
 
   let parsedBody = null;
   if (body.trim()) {
