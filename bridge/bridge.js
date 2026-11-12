@@ -21,6 +21,8 @@
  *   TB_BRIDGE_WS_HEARTBEAT_MS WebSocket ping interval used to drop dead extension sockets (default: 30000)
  *   TB_BRIDGE_WS_TAKEOVER_MS  how long a connected extension has to answer a ping before a new
  *                             connection may replace it (default: 2000)
+ *   TB_BRIDGE_MAX_TIMEOUT     ceiling for the X-TB-Timeout override in ms (default: 600000)
+ *   TB_BRIDGE_MAX_BODY        max HTTP request body in bytes (default: 10485760)
  *
  * Per-request override: HTTP clients can pass `X-TB-Timeout: <ms>` header.
  */
@@ -35,6 +37,8 @@ const WS_PORT = parseInt(process.argv.find((_, i, a) => a[i - 1] === "--ws-port"
 const DEFAULT_TIMEOUT = parseInt(process.env.TB_BRIDGE_TIMEOUT || "120000");
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.TB_BRIDGE_WS_HEARTBEAT_MS || "30000");
 const TAKEOVER_PROBE_MS = parseInt(process.env.TB_BRIDGE_WS_TAKEOVER_MS || "2000");
+const MAX_TIMEOUT = parseInt(process.env.TB_BRIDGE_MAX_TIMEOUT || "600000");
+const MAX_BODY_BYTES = parseInt(process.env.TB_BRIDGE_MAX_BODY || String(10 * 1024 * 1024));
 const CORS_ALLOWED_ORIGINS = new Set(
   (process.env.TB_BRIDGE_CORS_ORIGINS || `http://127.0.0.1:${HTTP_PORT},http://localhost:${HTTP_PORT}`)
     .split(",")
@@ -118,17 +122,35 @@ function isWebPageOrigin(originHeader) {
 let extensionSocket = null;
 const pending = new Map(); // id → { resolve, reject, timer }
 
+function slotHeld() {
+  return extensionSocket !== null && extensionSocket.readyState === 1;
+}
+
+/** Fail every in-flight request instead of making each one sit out its timeout. */
+function drainPending(message) {
+  for (const [id, p] of pending) {
+    pending.delete(id);
+    clearTimeout(p.timer);
+    p.reject({ message, code: "EXTENSION_DISCONNECTED" });
+  }
+}
+
 // ─── WebSocket Server (for extension) ───────────────────────────────
 
+// Whoever holds this socket answers every request the bridge forwards, so it is
+// a stronger position than calling the HTTP API. Web pages are refused by origin;
+// a local process sends no Origin at all, so a live extension is never displaced:
+// a new connection only takes the slot if the current holder fails a ping probe
+// (see the connection handler). The heartbeat evicts sockets that die silently.
 const wss = new WebSocketServer({
   host: "127.0.0.1",
   port: WS_PORT,
-  verifyClient: ({ req }) => {
+  verifyClient: ({ req }, done) => {
     if (isWebPageOrigin(req.headers.origin)) {
       console.error(`[bridge] Rejected WebSocket connection from web origin ${req.headers.origin}`);
-      return false;
+      return done(false, 403, "Forbidden");
     }
-    return true;
+    done(true);
   },
 });
 
@@ -163,6 +185,7 @@ wss.on("connection", (ws) => {
     }
     console.log("[bridge] Connected extension is unresponsive; replacing it");
     current.terminate();
+    drainPending("Thunderbird extension stopped responding while the request was in flight");
     attachExtension(ws);
   }, TAKEOVER_PROBE_MS);
 });
@@ -190,8 +213,10 @@ function attachExtension(ws) {
   });
 
   ws.on("close", () => {
+    if (extensionSocket !== ws) return;
     console.log("[bridge] Extension disconnected");
-    if (extensionSocket === ws) extensionSocket = null;
+    extensionSocket = null;
+    drainPending("Thunderbird extension disconnected while the request was in flight");
   });
 }
 
@@ -216,8 +241,11 @@ wss.on("close", () => {
 
 function forwardToExtension(method, path, body, timeoutMs = DEFAULT_TIMEOUT) {
   return new Promise((resolve, reject) => {
-    if (!extensionSocket || extensionSocket.readyState !== 1) {
-      reject({ message: "Thunderbird extension not connected. Is Thunderbird running?", code: "EXTENSION_DISCONNECTED" });
+    if (!slotHeld()) {
+      reject({
+        message: "Thunderbird extension not connected. Is Thunderbird running?",
+        code: "EXTENSION_DISCONNECTED",
+      });
       return;
     }
     const id = randomUUID();
@@ -297,8 +325,22 @@ const httpServer = createServer(async (req, res) => {
   }
 
   // Read body
+  // Capped: an unbounded read lets any local caller grow the heap until the daemon dies.
   let body = "";
-  for await (const chunk of req) body += chunk;
+  let received = 0;
+  for await (const chunk of req) {
+    received += chunk.length;
+    if (received > MAX_BODY_BYTES) {
+      // Answer first, then drop the connection; destroying it up front truncates the reply.
+      res.writeHead(413, { Connection: "close" });
+      res.end(
+        JSON.stringify({ error: `Request body exceeds ${MAX_BODY_BYTES} bytes`, code: "INVALID_ARGS" }),
+        () => req.socket?.destroy()
+      );
+      return;
+    }
+    body += chunk;
+  }
 
   let parsedBody = null;
   if (body.trim()) {
@@ -316,7 +358,8 @@ const httpServer = createServer(async (req, res) => {
   const headerTimeout = req.headers["x-tb-timeout"];
   if (headerTimeout) {
     const parsed = parseInt(headerTimeout);
-    if (parsed > 0) timeoutMs = parsed;
+    // Clamped: an unbounded value pins a pending entry and its socket indefinitely.
+    if (parsed > 0) timeoutMs = Math.min(parsed, MAX_TIMEOUT);
   }
 
   // Forward to extension

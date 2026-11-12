@@ -12,6 +12,35 @@
 
 import { parseRelativeDate } from "./client.js";
 
+/**
+ * `inputSchema` documents the argument types but nothing enforces them — the
+ * values arrive from a model, through whichever MCP client is in use. Anything
+ * spliced into a request path therefore gets checked here.
+ *
+ * A string such as "1/../../compose" would otherwise be normalised by fetch()
+ * into a path the caller never named.
+ */
+function msgId(value) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw Object.assign(new Error(`Invalid message ID: ${JSON.stringify(value)}`), {
+      code: "INVALID_ARGS",
+    });
+  }
+  return n;
+}
+
+/** Account IDs are opaque Thunderbird strings — keep them inside one segment. */
+function pathSegment(value, label) {
+  const s = String(value ?? "");
+  if (!s || s.includes("/") || s.includes("\\") || s === "." || s === "..") {
+    throw Object.assign(new Error(`Invalid ${label}: ${JSON.stringify(value)}`), {
+      code: "INVALID_ARGS",
+    });
+  }
+  return encodeURIComponent(s);
+}
+
 export const tools = [
   // ─── 1. Stats ──────────────────────────────────────────────────
   {
@@ -192,7 +221,7 @@ export const tools = [
       required: ["messageId"],
     },
     handler: async (args, api) => {
-      const id = args.messageId;
+      const id = msgId(args.messageId);
       const mode = args.mode || "default";
       let result;
       if (mode === "raw") result = await api("GET", `/messages/${id}/raw`);
@@ -224,7 +253,7 @@ export const tools = [
       required: ["messageId"],
     },
     handler: async (args, api) => {
-      return await api("GET", `/messages/${args.messageId}/thread`);
+      return await api("GET", `/messages/${msgId(args.messageId)}/thread`);
     },
   },
 
@@ -494,11 +523,11 @@ export const tools = [
     },
     handler: async (args, api) => {
       if (args.operation === "list") {
-        return await api("GET", `/messages/${args.messageId}/attachments`);
+        return await api("GET", `/messages/${msgId(args.messageId)}/attachments`);
       }
       if (args.operation === "download") {
         if (!args.partName) return { error: "partName required for download" };
-        return await api("POST", `/messages/${args.messageId}/attachment`, {
+        return await api("POST", `/messages/${msgId(args.messageId)}/attachment`, {
           partName: args.partName,
         });
       }
@@ -533,13 +562,13 @@ export const tools = [
     handler: async (args, api) => {
       if (args.operation === "list") {
         if (!args.accountId) return { error: "accountId required for list" };
-        return await api("GET", `/accounts/${args.accountId}/folders`);
+        return await api("GET", `/accounts/${pathSegment(args.accountId, "accountId")}/folders`);
       }
       if (args.operation === "all") {
         const accounts = await api("GET", "/accounts");
         const all = [];
         for (const acct of accounts) {
-          const folders = await api("GET", `/accounts/${acct.id}/folders`);
+          const folders = await api("GET", `/accounts/${pathSegment(acct.id, "accountId")}/folders`);
           for (const f of folders) all.push({ ...f, accountId: acct.id });
         }
         return all;

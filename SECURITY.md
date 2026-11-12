@@ -102,6 +102,24 @@ Covered by `npm run test:bridge-security`.
 
 ## CLI-Level Defenses (Data Layer)
 
+> **Status: this section is a design proposal, not a description of shipped code.**
+>
+> **None of Defenses 1–8 below are implemented.** There is no sanitization
+> pass, no `_trust` block, no `suspiciousPatterns`, no `sanitization` report,
+> no `--mark-untrusted` flag, no `--read-only` flag, no audit log, no rate
+> limiting, no URL extraction and no attachment risk scoring anywhere in
+> `extension/src/background.js`, `bridge/bridge.js` or `cli/src/`. Message
+> bodies are passed through exactly as Thunderbird returns them. The matching
+> items in `SPEC.md` are correctly unchecked (`- [ ]`); this file's present
+> tense was misleading and should be read as future work.
+>
+> The only content-layer defense that ships is **junk exclusion**:
+> `messages.query` sets `junk: false` unless `includeJunk` is passed. It is a
+> row in the defense matrix below, not one of the numbered defenses here.
+>
+> Anyone relying on this document to decide whether email content reaching an
+> agent has been filtered should assume it has not.
+
 These are deterministic, require no AI, and run in the extension/bridge.
 
 ### Defense 1: Structured Trust Boundaries in Output
@@ -455,22 +473,29 @@ adversarial text, never as instructions.
 
 ## Summary: Defense Matrix
 
-| Layer | Where | What | Blocks attacks |
-|-------|-------|------|---------------|
-| HTML sanitization | Extension | Strips hidden text | Hidden instruction injection |
-| Trust boundaries | CLI output | Marks trusted/untrusted fields | Confused deputy |
-| Suspicious patterns | CLI output | Flags injection-like text | Direct prompt injection |
-| Junk exclusion | CLI defaults | Excludes spam from results | Spam-based injection |
-| Caller authentication | Bridge | Requires `Authorization: Bearer` (`TB_AUTH_TOKEN`) | Untrusted local process reaching the mailbox |
-| Origin / Host checks | Bridge | Rejects browser origins, rebinding hosts, web-page WebSockets | Hostile web page (CSRF, DNS rebinding, extension hijack) |
-| Read-only mode | Bridge | Disables all writes | Any write-based attack |
-| Rate limiting | Bridge | Throttles write ops | Mass exfiltration/deletion |
-| Audit log | Bridge | Logs all writes | Post-incident forensics |
-| URL extraction | CLI output | Classifies URLs | Phishing |
-| Attachment metadata | CLI output | Flags dangerous files | Malware delivery |
-| Two-phase read | Agent pattern | Headers first, body later | Context contamination |
-| Context isolation | Agent pattern | Boundary markers | Injection crossing trust boundary |
-| Intent matching | Agent pattern | Validates action vs intent | Confused deputy |
-| Human-in-the-loop | Agent pattern | Approval for writes | All write attacks |
-| Output isolation | Agent pattern | No verbatim forwarding | Self-replicating worms |
-| Multi-agent split | Agent pattern | Separate read/write agents | Combined capability abuse |
+**Status** — `shipped` is in the code today; `planned` is described above but not
+implemented; agent patterns are guidance for the calling agent, not code.
+
+| Layer | Where | What | Blocks attacks | Status |
+|-------|-------|------|---------------|--------|
+| HTML sanitization | Extension | Strips hidden text | Hidden instruction injection | planned |
+| Trust boundaries | CLI output | Marks trusted/untrusted fields | Confused deputy | planned |
+| Suspicious patterns | CLI output | Flags injection-like text | Direct prompt injection | planned |
+| Junk exclusion | CLI defaults | Excludes spam from results | Spam-based injection | shipped |
+| Caller authentication | Bridge | Requires `Authorization: Bearer` (`TB_AUTH_TOKEN`) | Untrusted local process reaching the mailbox | shipped |
+| Origin / Host checks | Bridge | Rejects browser origins, rebinding hosts, web-page WebSockets | Hostile web page (CSRF, DNS rebinding, extension hijack) | shipped |
+| WS slot protection | Bridge | A new connection replaces the extension only if it fails a ping probe; the heartbeat evicts dead sockets | Local process hijacking the extension slot | shipped |
+| Request-path guard | CLI + MCP | Rejects IDs that escape their path segment | Agent-supplied ID reaching an unintended bridge route | shipped |
+| Attachment name sanitizing | CLI | Keeps the last path segment of sender-controlled filenames | Path traversal in `attachment-download --all` | shipped |
+| Resource limits | Bridge | Caps request body and `X-TB-Timeout` | Local caller exhausting the daemon | shipped |
+| Read-only mode | Bridge | Disables all writes | Any write-based attack | planned |
+| Rate limiting | Bridge | Throttles write ops | Mass exfiltration/deletion | planned |
+| Audit log | Bridge | Logs all writes | Post-incident forensics | planned |
+| URL extraction | CLI output | Classifies URLs | Phishing | planned |
+| Attachment metadata | CLI output | Flags dangerous files | Malware delivery | planned |
+| Two-phase read | Agent pattern | Headers first, body later | Context contamination | agent guidance |
+| Context isolation | Agent pattern | Boundary markers | Injection crossing trust boundary | agent guidance |
+| Intent matching | Agent pattern | Validates action vs intent | Confused deputy | agent guidance |
+| Human-in-the-loop | Agent pattern | Approval for writes | All write attacks | agent guidance |
+| Output isolation | Agent pattern | No verbatim forwarding | Self-replicating worms | agent guidance |
+| Multi-agent split | Agent pattern | Separate read/write agents | Combined capability abuse | agent guidance |

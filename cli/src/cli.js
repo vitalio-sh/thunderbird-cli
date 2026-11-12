@@ -653,7 +653,19 @@ program
     const g = program.opts();
     const timeout = getTimeout(g);
     const { writeFileSync, mkdirSync } = await import("fs");
-    const { join } = await import("path");
+    const { join, basename } = await import("path");
+
+    // Attachment filenames come from the sender and are fully attacker-
+    // controlled: "../../.ssh/authorized_keys" would escape --output-dir.
+    // Keep the last path segment only, on both separators, and reject names
+    // that reduce to nothing meaningful.
+    const safeName = (name, fallback) => {
+      const stripped = basename(String(name || "").replace(/\\/g, "/"));
+      if (!stripped || stripped === "." || stripped === "..") {
+        return `attachment-${fallback}`;
+      }
+      return stripped;
+    };
 
     if (opts.all) {
       const attachments = await api("GET", `/messages/${messageId}/attachments`, null, timeout);
@@ -662,7 +674,7 @@ program
       const results = [];
       for (const att of attachments) {
         const data = await api("POST", `/messages/${messageId}/attachment`, { partName: att.partName }, timeout);
-        const filePath = join(dir, att.name || att.partName);
+        const filePath = join(dir, safeName(att.name, att.partName));
         writeFileSync(filePath, Buffer.from(data.data, "base64"));
         results.push({ partName: att.partName, name: att.name, path: filePath });
       }
