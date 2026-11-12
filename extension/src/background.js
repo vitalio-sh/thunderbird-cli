@@ -557,7 +557,11 @@ async function handleRequest({ method, path, body }) {
       if (!original.isPlainText) {
         const doc = new DOMParser().parseFromString(original.body || "", "text/html");
         const intro = doc.createElement("div");
-        if (isHTML) intro.innerHTML = replyBody;
+        if (isHTML) {
+          // Parse into a separate inert document and import the nodes (no innerHTML).
+          const parsed = new DOMParser().parseFromString(replyBody, "text/html");
+          for (const node of [...parsed.body.childNodes]) intro.append(doc.importNode(node, true));
+        }
         else for (const paragraph of replyBody.trim().split(/\n\s*\n/)) {
           const p = doc.createElement("p");
           p.textContent = paragraph.replace(/\s*\n\s*/g, " ");
