@@ -7,7 +7,7 @@
 
 import { createServer } from "http";
 import { spawn } from "child_process";
-import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync, existsSync } from "fs";
+import { mkdtempSync, writeFileSync, readFileSync, statSync, rmSync, existsSync, mkdirSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -34,6 +34,7 @@ const server = createServer(async (req, res) => {
   if (req.url === "/messages/list") return reply(listResponse);
   if (req.url === "/messages/move") return reply({ success: true, moved: body.messageIds.length });
   if (req.url === "/reply") return reply({ success: true, action: "draft_saved" });
+  if (req.url === "/compose" || req.url === "/forward") return reply({ success: true, action: "draft_saved" });
   if (req.url === "/messages/7/attachments") return reply([{ name: "../../evil.txt", partName: "1.2" }]);
   if (req.url === "/messages/7/attachment") return reply({ name: "x", size: 5, data: Buffer.from("hello").toString("base64") });
   if (req.url === "/messages/7/full") return reply({ id: 7, parts: { text: "t".repeat(50), html: "h".repeat(50) } });
@@ -45,7 +46,8 @@ await new Promise((r) => server.listen(PORT, "127.0.0.1", r));
 function tb(...args) {
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [join(ROOT, "cli/src/cli.js"), ...args], {
-      env: { ...process.env, HOME, TB_BRIDGE_HOST: "127.0.0.1", TB_BRIDGE_PORT: String(PORT), TB_AUTH_TOKEN: "" },
+      env: { ...process.env, HOME, TB_BRIDGE_HOST: "127.0.0.1", TB_BRIDGE_PORT: String(PORT), TB_AUTH_TOKEN: "",
+        TB_ATTACH_DIR: join(HOME, "outbox") },
     });
     let out = "", err = "";
     p.stdout.on("data", (d) => (out += d));
@@ -112,6 +114,33 @@ test("HTML part is truncated", fullData?.parts?.htmlTruncated === true && fullDa
 const raw = await tb("--max-body", "10", "read", "7", "--raw");
 const rawData = raw.json?.data ?? raw.json;
 test("raw source is truncated", rawData?.rawTruncated === true || /\.\.\.\[truncated\]/.test(raw.out), raw.out.slice(0, 200));
+
+console.log("\n\x1b[1mOutgoing attachments (safe folder)\x1b[0m");
+const outbox = join(HOME, "outbox");
+const missingDir = await tb("compose", "--to", "a@b.c", "--body", "x", "--attach", "report.pdf");
+test("missing attachments folder is reported, nothing sent", missingDir.code !== 0 && /does not exist/.test(missingDir.out + missingDir.err));
+mkdirSync(join(outbox, "sub"), { recursive: true });
+writeFileSync(join(outbox, "report.pdf"), "%PDF-1.4 test");
+writeFileSync(join(outbox, ".secret"), "hidden");
+writeFileSync(join(HOME, "outside.txt"), "private");
+symlinkSync(join(HOME, "outside.txt"), join(outbox, "link.txt"));
+seen = since();
+const okAttach = await tb("compose", "--to", "a@b.c", "--body", "x", "--attach", "report.pdf");
+const sent = seen().find((q) => q.path === "/compose")?.body.attachments;
+test("attaches a file from the folder by name", okAttach.code === 0 && sent?.length === 1 && sent[0].name === "report.pdf" &&
+  sent[0].contentType === "application/pdf" && Buffer.from(sent[0].data, "base64").toString() === "%PDF-1.4 test", okAttach.out + okAttach.err);
+for (const [label, name] of [["a path outside the folder", join(HOME, "outside.txt")], ["parent traversal", "../outside.txt"],
+  ["a subfolder path", "sub/x.txt"], ["a dotfile", ".secret"], ["a symlink", "link.txt"], ["a directory", "sub"], ["a missing file", "nope.pdf"]]) {
+  seen = since();
+  const r = await tb("reply", "5", "--body", "x", "--attach", name);
+  test(`rejects ${label} without contacting the bridge`, r.code !== 0 && seen().length === 0, r.out + r.err);
+}
+seen = since();
+await tb("forward", "5", "--to", "x@y.z", "--attach", "report.pdf");
+test("forward carries attachments", seen().find((q) => q.path === "/forward")?.body.attachments?.[0]?.name === "report.pdf");
+const listing = await tb("attachable");
+const listed = (listing.json?.data ?? listing.json)?.files?.map((f) => f.name);
+test("attachable lists only regular, visible files", JSON.stringify(listed) === '["report.pdf"]', listing.out);
 
 server.close();
 rmSync(HOME, { recursive: true, force: true });

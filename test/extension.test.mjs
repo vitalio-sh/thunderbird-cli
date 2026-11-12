@@ -90,6 +90,11 @@ const messenger = {
     },
     getComposeDetails: async () => ({ isPlainText: true, plainTextBody: "> quoted original" }),
     setComposeDetails: async (tabId, details) => { calls.compose.push({ op: "set", tabId, details }); },
+    beginForward: async (messageId, type, details) => {
+      calls.compose.push({ op: "beginForward", messageId, type, details });
+      return { id: 3 };
+    },
+    addAttachment: async (tabId, att) => { calls.compose.push({ op: "addAttachment", tabId, att }); },
     saveMessage: async () => {},
     sendMessage: async () => {},
   },
@@ -143,6 +148,7 @@ let attachmentBytes = null;
 
 const ctx = vm.createContext({
   console: { log() {}, error() {} },
+  atob, File,
   WebSocket: MockWebSocket,
   messenger,
   btoa,
@@ -607,6 +613,42 @@ const formatted = ctx.formatMessage(header(1, { date: new Date("2026-06-15T10:32
 test("date stays UTC", formatted.date === "2026-06-15T10:32:05.000Z");
 test("dateLocal has an explicit offset", /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$/.test(formatted.dateLocal), formatted.dateLocal);
 test("dateLocal is the same instant", new Date(formatted.dateLocal).getTime() === new Date(formatted.date).getTime());
+
+// ─── #23 outgoing attachments ───────────────────────────────────────
+
+console.log("\n\x1b[1mOutgoing attachments\x1b[0m");
+const pdf = { name: "invoice.pdf", contentType: "application/pdf", data: Buffer.from("%PDF test").toString("base64") };
+calls.compose.length = 0;
+await handle("POST", "/compose", { to: "a@example.org", body: "b", attachments: [pdf], draft: true });
+const newDetails = calls.compose.find((c) => c.op === "beginNew")?.details;
+const newFile = newDetails?.attachments?.[0]?.file;
+test("compose passes attachments as File objects", newFile?.name === "invoice.pdf" && newFile.type === "application/pdf" &&
+  Buffer.from(await newFile.arrayBuffer()).toString() === "%PDF test");
+calls.compose.length = 0;
+await handle("POST", "/reply", { messageId: 5, body: "see attached", attachments: [pdf], draft: true });
+const ops = calls.compose.map((c) => c.op);
+test("reply adds attachments after preparing the quoted body",
+  ops.indexOf("addAttachment") > ops.indexOf("set") && calls.compose.find((c) => c.op === "addAttachment")?.att.file.name === "invoice.pdf");
+calls.compose.length = 0;
+await handle("POST", "/forward", { messageId: 5, to: "x@example.org", attachments: [pdf], draft: true });
+test("forward keeps the forwarded message and adds files separately",
+  !calls.compose.find((c) => c.op === "beginForward")?.details.attachments &&
+  calls.compose.find((c) => c.op === "addAttachment")?.tabId === 3);
+for (const [label, att] of [
+  ["a path as name", { name: "../../etc/passwd", data: "AAAA" }],
+  ["invalid base64", { name: "x.txt", data: "not base64!" }],
+  ["an oversized total", { name: "big.bin", data: "A".repeat(4 * Math.ceil((25 * 1024 * 1024 + 10) / 3)) }],
+]) {
+  calls.compose.length = 0;
+  let attErr;
+  try { await handle("POST", "/reply", { messageId: 5, body: "x", attachments: [att] }); } catch (e) { attErr = e; }
+  test(`rejects ${label} before opening a compose tab`, attErr?.code === "INVALID_ARGS" && calls.compose.length === 0, attErr?.message);
+}
+const odd = { name: "x.bin", contentType: "text/html; evil", data: "AAAA" };
+calls.compose.length = 0;
+await handle("POST", "/compose", { to: "a@example.org", body: "b", attachments: [odd], draft: true });
+test("unexpected content types fall back to octet-stream",
+  calls.compose.find((c) => c.op === "beginNew")?.details.attachments[0].file.type === "application/octet-stream");
 
 // ─── Attachment ─────────────────────────────────────────────────────
 
