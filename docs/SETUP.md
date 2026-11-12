@@ -127,6 +127,18 @@ TB_BRIDGE_HOST=host.docker.internal
 TB_BRIDGE_PORT=7700
 ```
 
+## Limiting which accounts agents can use
+
+By default agents see every account in Thunderbird. To restrict them, open Thunderbird's
+**Add-ons and Themes → Thunderbird AI Bridge → Options** (the wrench/"Preferences" entry), choose
+**Only the accounts checked below**, tick the allowed accounts and **Save**. It applies to the
+next request; no restart needed. `tb account-access` shows the current setting.
+
+Other accounts become invisible: their folders, messages and sender identities answer "not found",
+search/recent/thread results leave them out, and compose falls back to an identity of an allowed
+account. Agents cannot change this setting (no bridge route writes it). Address books are not tied
+to accounts and stay available. If the stored setting is ever unreadable, every account is blocked.
+
 ## Configuration
 
 Config file location: `~/.config/thunderbird-cli/config.json`

@@ -25,9 +25,18 @@
     "messagesImport",
     "accountsFolders",
     "idle",
-    "tabs"
+    "tabs",
+    "storage"
   ],
   "background": {
-    "scripts": ["src/thread-utils.js", "src/background.js"]
+    "scripts": [
+      "src/account-access.js",
+      "src/thread-utils.js",
+      "src/background.js"
+    ]
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": false
   }
 }

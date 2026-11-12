@@ -121,6 +121,15 @@ async function handleRequest({ method, path, body }) {
     }
   }
 
+  // ─── Account access (#18) ───────────────────────────────────────
+  // Accounts outside the user's selection are invisible: anything addressed in them is "not found".
+  const access = await loadAccountAccess();
+  const canSee = (accountId) => !access.accounts || access.accounts.has(accountId);
+  if (access.accounts) await enforceAccountAccess(path, body, canSee);
+  if (path === "/access" && method === "GET") {
+    return { mode: access.mode, accounts: access.accounts ? [...access.accounts] : "all" };
+  }
+
   // Health
   if (path === "/health") {
     return { status: "ok", version: messenger.runtime.getManifest().version, thunderbird: true };
@@ -129,7 +138,7 @@ async function handleRequest({ method, path, body }) {
   // ─── Accounts ───────────────────────────────────────────────────
 
   if (path === "/accounts" && method === "GET") {
-    const accounts = await messenger.accounts.list(true);
+    const accounts = (await messenger.accounts.list(true)).filter((a) => canSee(a.id));
     return accounts.map((a) => ({
       id: a.id,
       name: a.name,
@@ -162,7 +171,7 @@ async function handleRequest({ method, path, body }) {
   // ─── Identities ────────────────────────────────────────────────
 
   if (path === "/identities" && method === "GET") {
-    const accounts = await messenger.accounts.list(true);
+    const accounts = (await messenger.accounts.list(true)).filter((a) => canSee(a.id));
     const identities = [];
     for (const acct of accounts) {
       for (const id of (acct.identities || [])) {
@@ -211,6 +220,8 @@ async function handleRequest({ method, path, body }) {
 
   // ─── Search ─────────────────────────────────────────────────────
 
+  const visibleMsg = (m) => canSee(m.folder?.accountId);
+
   if (path === "/messages/search" && method === "POST") {
     const { query, accountId, fromAddress, toAddress, subject,
             unreadOnly, flagged, limit = 25, fromDate, toDate,
@@ -244,14 +255,14 @@ async function handleRequest({ method, path, body }) {
 
     let result;
     try {
-      result = await collectMessages(() => messenger.messages.query(q), limit);
+      result = await collectMessages(() => messenger.messages.query(q), limit, { accept: visibleMsg });
     } catch (e) {
       if (mode !== "fulltext") throw e;
       // Older Thunderbird without fullText support: fall back to a body scan.
       delete q.fullText;
       q.body = query;
       mode = "body";
-      result = await collectMessages(() => messenger.messages.query(q), limit);
+      result = await collectMessages(() => messenger.messages.query(q), limit, { accept: visibleMsg });
     }
     if (mode) result.searchMode = mode;
     return result;
@@ -454,7 +465,7 @@ async function handleRequest({ method, path, body }) {
     const seen = new Set();
     const thread = [];
     const add = (m, threadMatch) => {
-      if (seen.has(m.id)) return;
+      if (seen.has(m.id) || !canSee(m.folder?.accountId)) return;
       seen.add(m.id);
       thread.push({ ...m, threadMatch }); // already formatted by collectMessages
     };
@@ -526,7 +537,8 @@ async function handleRequest({ method, path, body }) {
     if (subject) details.subject = subject;
     if (isHTML) { details.isPlainText = false; details.body = msgBody; }
     else { details.isPlainText = true; details.plainTextBody = msgBody; }
-    if (identityId) details.identityId = await resolveIdentityId(identityId);
+    if (identityId) details.identityId = await resolveIdentityId(identityId, canSee);
+    else if (access.accounts) details.identityId = await defaultVisibleIdentity(canSee);
     if (priority) details.priority = priority;
     const tab = await messenger.compose.beginNew(null, details);
     if (send) {
@@ -622,7 +634,7 @@ async function handleRequest({ method, path, body }) {
   // ─── Stats (GET — legacy) ──────────────────────────────────────
 
   if (path === "/stats" && method === "GET") {
-    const accounts = await messenger.accounts.list(true);
+    const accounts = (await messenger.accounts.list(true)).filter((a) => canSee(a.id));
     const stats = [];
     for (const account of accounts) {
       const s = { id: account.id, name: account.name, type: account.type,
@@ -643,7 +655,7 @@ async function handleRequest({ method, path, body }) {
   // ─── Stats (POST — enhanced) ───────────────────────────────────
 
   if (path === "/stats" && method === "POST") {
-    const accounts = await messenger.accounts.list(true);
+    const accounts = (await messenger.accounts.list(true)).filter((a) => canSee(a.id));
     let accts = accounts;
     if (body && body.accountId) accts = accounts.filter((a) => a.id === body.accountId);
     const stats = [];
@@ -673,7 +685,7 @@ async function handleRequest({ method, path, body }) {
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
     const result = await collectMessages(
       () => messenger.messages.query({ fromDate: since }), limit,
-      { unreadOnly, accountId: accountId || null, compare: (a, b) => new Date(b.date) - new Date(a.date) }
+      { unreadOnly, accountId: accountId || null, accept: visibleMsg, compare: (a, b) => new Date(b.date) - new Date(a.date) }
     );
     result.since = since.toISOString();
     return result;
@@ -802,11 +814,16 @@ function toLocalIsoString(date) {
  * Accept either an identity ID ("id2") or the identity's email address. Addresses are matched
  * case-insensitively; an address shared by several identities must be given as an ID.
  */
-async function resolveIdentityId(value) {
-  if (typeof value !== "string" || !value.includes("@")) return value;
+async function resolveIdentityId(value, canSee = () => true) {
+  const visible = (await messenger.accounts.list(false)).filter((a) => canSee(a.id));
+  if (typeof value !== "string" || !value.includes("@")) {
+    // An identity ID must belong to a visible account.
+    if (visible.some((a) => (a.identities || []).some((i) => i.id === value))) return value;
+    throw Object.assign(new Error(`Identity not found: ${value}`), { code: "NOT_FOUND" });
+  }
   const wanted = value.trim().toLowerCase();
   const matches = [];
-  for (const account of await messenger.accounts.list(false)) {
+  for (const account of visible) {
     for (const identity of account.identities || []) {
       if ((identity.email || "").toLowerCase() === wanted) matches.push(identity);
     }
@@ -816,6 +833,41 @@ async function resolveIdentityId(value) {
     throw Object.assign(new Error(`No sender identity with address ${value}. List identities with \`tb identities\` or email_stats.`), { code: "NOT_FOUND" });
   }
   throw invalidArgs(`address ${value} belongs to several identities (${matches.map((i) => i.id).join(", ")}); pass the identity ID`);
+}
+
+/** With restricted access, never fall back to Thunderbird's default identity in a hidden account. */
+async function defaultVisibleIdentity(canSee) {
+  for (const account of await messenger.accounts.list(false)) {
+    if (canSee(account.id) && account.identities?.length) return account.identities[0].id;
+  }
+  throw Object.assign(new Error("No sender identity in the accounts this add-on may use"), { code: "NOT_FOUND" });
+}
+
+/**
+ * Reject requests that address an account, folder or message outside the allowed accounts.
+ * Covers path IDs (/accounts/:id, /messages/:id/...) and body fields used by every route.
+ */
+async function enforceAccountAccess(path, body, canSee) {
+  const hidden = (what) => Object.assign(new Error(`${what} not found`), { code: "NOT_FOUND" });
+  const acct = path.match(/^\/accounts\/([^/]+)/);
+  if (acct && !canSee(decodeURIComponent(acct[1]))) throw hidden("Account");
+  if (body?.accountId !== undefined && body.accountId !== null && !canSee(body.accountId)) throw hidden("Account");
+  const ids = [];
+  const pathMsg = path.match(/^\/messages\/(\d+)(?:\/|$)/);
+  if (pathMsg) ids.push(Number(pathMsg[1]));
+  if (body?.messageId !== undefined) ids.push(body.messageId);
+  if (Array.isArray(body?.messageIds)) ids.push(...body.messageIds);
+  for (const id of ids) {
+    let msg = null;
+    try { msg = await messenger.messages.get(id); } catch { /* treated as missing */ }
+    if (!msg || !canSee(msg.folder?.accountId)) throw hidden(`Message ${id}`);
+  }
+  for (const key of ["folderId", "destinationFolderId", "parentFolderId"]) {
+    if (body?.[key] === undefined || body[key] === null) continue;
+    let folder = null;
+    try { folder = await messenger.folders.get(body[key], false); } catch { /* treated as missing */ }
+    if (!folder || !canSee(folder.accountId)) throw hidden("Folder");
+  }
 }
 
 /**

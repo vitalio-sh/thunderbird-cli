@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Thunderbird AI Bridge — account access</title>
+  <style>
+    body { font: menu; padding: 0.5em 1em; max-width: 40em; }
+    fieldset { border: 1px solid #ccc; margin: 0.8em 0; }
+    #accounts label { display: block; margin: 0.25em 0 0.25em 1.5em; }
+    #status { margin-left: 0.8em; }
+    .note { color: #555; font-size: 0.92em; }
+  </style>
+</head>
+<body>
+  <h2>Account access for AI agents</h2>
+  <p class="note">Agents that use thunderbird-cli (CLI or MCP) only see the accounts you allow here.
+    Other accounts behave as if they did not exist: their folders, messages and sender identities are hidden.
+    Agents cannot change this setting.</p>
+  <fieldset>
+    <label><input type="radio" name="mode" value="all"> All accounts</label>
+    <label><input type="radio" name="mode" value="selected"> Only the accounts checked below</label>
+    <div id="accounts"></div>
+  </fieldset>
+  <p class="note">Address books (contacts) are not tied to accounts and stay available.
+    Accounts added later stay hidden until you check them.</p>
+  <button id="save">Save</button><span id="status" role="status"></span>
+  <script src="../src/account-access.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
