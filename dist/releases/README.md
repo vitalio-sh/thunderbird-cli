@@ -13,10 +13,10 @@ mkdir -p /tmp/a /tmp/b && unzip -oq dist/thunderbird-cli-2.2.0.xpi -d /tmp/a \
   && unzip -oq dist/releases/thunderbird_ai_bridge-2.2.0-tb.xpi -d /tmp/b && diff -r /tmp/a /tmp/b
 ```
 
-From 2.1.1 on, `npm run build:xpi` uses fixed file order and timestamps, so a rebuild is also
-byte-identical (`cmp`) when it runs on the same Node.js major version as the release: zlib's
-compressed output differs between Node versions. 2.1.1 and later are built with Node.js 24 (the release workflow too). Releases up to
-2.1.0 embed build timestamps, so only their contents match.
+From the release after 2.2.0, `npm run build:xpi` stores files uncompressed with fixed order and
+timestamps, so a rebuild is byte-identical (`cmp`) on any machine. 2.1.1 and 2.2.0 are deflated:
+zlib output differs between Node builds (even Node 24 on macOS vs Linux), so verify those by contents
+as above. Releases up to 2.1.0 also embed build timestamps.
 
 ## Files
 
