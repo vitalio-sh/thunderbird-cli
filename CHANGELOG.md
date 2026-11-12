@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-11-12
+
+npm packages 1.2.0; Thunderbird extension 2.2.0. **Direct sending is now off by default** (see Changed).
+
 ### Changed
 - **Direct sending is off by default.** Compose/reply/forward with `send` fail with `SEND_DISABLED` (HTTP 403) before anything is created, unless the user ticks "Allow agents to send email directly" in the add-on's options. Drafts and `open` mode are unaffected. Agents cannot change the setting; a malformed value keeps sending off. Users who rely on `--send` / `mode: "send"` must enable it once.
 - Bridge answers `NOT_FOUND` errors with HTTP 404 (was 500).
