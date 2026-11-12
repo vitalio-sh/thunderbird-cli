@@ -228,6 +228,12 @@ tb bulk tag <folderId> <tagKey> [--older-than <days>] [--from <addr>]
 tb bulk fetch <folderId> [-l <n>]                                 # force IMAP download
 ```
 
+## Account access
+
+```bash
+tb account-access    # { mode: "all" | "selected" | "invalid", accounts: [...] } — set in the add-on's options
+```
+
 ## Output Format
 
 Message objects carry `date` (UTC, `…Z`) and `dateLocal` (Thunderbird's local time with offset, e.g. `2026-11-12T12:32:05+02:00`).

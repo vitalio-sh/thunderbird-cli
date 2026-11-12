@@ -114,6 +114,16 @@ program
     output(data, g.format, getOutputOpts(g));
   }));
 
+// ─── Account access (#18) ─────────────────────────────────────────────
+
+program
+  .command("account-access")
+  .description("Show which accounts the add-on lets agents see (set in the add-on's options in Thunderbird)")
+  .action(run(async () => {
+    const g = program.opts();
+    output(await api("GET", "/access", null, getTimeout(g)), g.format, getOutputOpts(g));
+  }));
+
 // ─── Identities ───────────────────────────────────────────────────────
 
 program

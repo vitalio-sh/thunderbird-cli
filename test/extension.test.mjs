@@ -56,6 +56,7 @@ function header(id, extra = {}) {
 }
 
 const calls = { query: [], getRaw: [], update: [], abort: [], compose: [] };
+let storageValue; // account access setting (#18); undefined = never configured
 let inFlight = 0, maxInFlight = 0;
 const track = async (fn) => {
   inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
@@ -78,8 +79,9 @@ const queryHandlers = [];
 const messenger = {
   runtime: { getManifest: () => manifest },
   idle: { onStateChanged: { addListener: (fn) => idleListeners.push(fn) } },
+  storage: { local: { get: async (key) => (storageValue === undefined ? {} : { [key]: storageValue }) } },
   folders: {
-    get: async (id) => ({ id, accountId: "acct1" }),
+    get: async (id) => ({ id, accountId: String(id).startsWith("hidden") ? "acct2" : "acct1" }),
     getFolderInfo: async () => ({ totalMessageCount: 7, unreadMessageCount: 3 }),
   },
   compose: {
@@ -649,6 +651,63 @@ calls.compose.length = 0;
 await handle("POST", "/compose", { to: "a@example.org", body: "b", attachments: [odd], draft: true });
 test("unexpected content types fall back to octet-stream",
   calls.compose.find((c) => c.op === "beginNew")?.details.attachments[0].file.type === "application/octet-stream");
+
+// ─── #18 per-account access ─────────────────────────────────────────
+
+console.log("\n\x1b[1mAccount access\x1b[0m");
+store.set(700, { header: header(700, { folder: folder("acct1") }) });
+store.set(701, { header: header(701, { folder: folder("acct2") }) });
+const notFound = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
+
+storageValue = undefined;
+test("default (never configured) shows every account", (await handle("GET", "/accounts")).length === 2);
+test("access route reports mode all", (await handle("GET", "/access")).mode === "all");
+
+storageValue = { mode: "selected", accounts: ["acct1", "account1"] };
+test("account list is filtered", JSON.stringify((await handle("GET", "/accounts")).map((a) => a.id)) === '["account1"]');
+test("identities are filtered", (await handle("GET", "/identities")).every((i) => i.accountId === "account1"));
+test("stats are filtered", JSON.stringify((await handle("GET", "/stats")).accounts.map((a) => a.id)) === '["account1"]');
+test("hidden account by ID → NOT_FOUND", (await notFound(() => handle("GET", "/accounts/account2/folders")))?.code === "NOT_FOUND");
+test("visible message readable", (await handle("GET", "/messages/700/headers")).id === 700);
+test("hidden message → NOT_FOUND", (await notFound(() => handle("GET", "/messages/701/raw")))?.code === "NOT_FOUND");
+test("batch containing a hidden message is refused",
+  (await notFound(() => handle("POST", "/messages/read-batch", { messageIds: [700, 701] })))?.code === "NOT_FOUND");
+test("move from a hidden message is refused",
+  (await notFound(() => handle("POST", "/messages/move", { messageIds: [701], destinationFolderId: "f1" })))?.code === "NOT_FOUND");
+test("move into a hidden folder is refused",
+  (await notFound(() => handle("POST", "/messages/move", { messageIds: [700], destinationFolderId: "hidden-inbox" })))?.code === "NOT_FOUND");
+test("listing a hidden folder is refused",
+  (await notFound(() => handle("POST", "/messages/list", { folderId: "hidden-inbox" })))?.code === "NOT_FOUND");
+test("reply to a hidden message is refused",
+  (await notFound(() => handle("POST", "/reply", { messageId: 701, body: "x" })))?.code === "NOT_FOUND");
+test("search scoped to a hidden account is refused",
+  (await notFound(() => handle("POST", "/messages/search", { accountId: "acct2", subject: "x" })))?.code === "NOT_FOUND");
+queryHandlers.length = 0;
+queryHandlers.push(() => ({ messages: [header(710, { folder: folder("acct2") }), header(711, { folder: folder("acct1") })] }));
+const filteredSearch = await handle("POST", "/messages/search", { subject: "Message", limit: 10 });
+test("search results exclude hidden accounts", JSON.stringify(filteredSearch.messages.map((m) => m.id)) === "[711]");
+const filteredRecent = await handle("POST", "/recent", { limit: 10 });
+test("recent excludes hidden accounts", filteredRecent.messages.every((m) => m.folder.accountId === "acct1"));
+queryHandlers.length = 0;
+calls.compose.length = 0;
+await handle("POST", "/compose", { to: "a@example.org", body: "b", draft: true });
+test("compose without from uses an allowed account's identity",
+  calls.compose.find((c) => c.op === "beginNew")?.details.identityId === "id1");
+test("sender identity in a hidden account → NOT_FOUND",
+  (await notFound(() => handle("POST", "/compose", { to: "a@example.org", body: "b", identityId: "id3" })))?.code === "NOT_FOUND");
+calls.compose.length = 0;
+await handle("POST", "/compose", { to: "a@example.org", body: "b", identityId: "shared@example.org", draft: true });
+test("shared address resolves within visible accounts only",
+  calls.compose.find((c) => c.op === "beginNew")?.details.identityId === "id2");
+
+storageValue = { mode: "selected", accounts: "acct1" }; // malformed
+test("malformed setting fails closed", (await handle("GET", "/accounts")).length === 0 &&
+  (await notFound(() => handle("GET", "/messages/700/headers")))?.code === "NOT_FOUND");
+test("access route reports invalid", (await handle("GET", "/access")).mode === "invalid");
+storageValue = { mode: "all" };
+test("mode all restores everything", (await handle("GET", "/messages/701/headers")).id === 701);
+storageValue = undefined;
+store.delete(700); store.delete(701);
 
 // ─── Attachment ─────────────────────────────────────────────────────
 
