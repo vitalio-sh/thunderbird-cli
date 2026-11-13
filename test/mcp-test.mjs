@@ -124,7 +124,7 @@ function handle({ method, path, body }) {
     return { success: true, action: body?.send ? "sent" : body?.open ? "draft_opened" : "draft_saved" };
   }
   if (path === "/reply") return { success: true, action: body?.send ? "sent" : "draft_saved" };
-  if (path === "/forward") return { success: true, action: body?.send ? "sent" : "draft_saved" };
+  if (path === "/forward") return { success: true, action: body?.send ? "sent" : "draft_saved", inline: body?.inline === true };
   if (path === "/stats")
     return { totalAccounts: 1, totalUnread: 5, totalMessages: 100, accounts: [] };
   if (path === "/sync") return { success: true, synced: body?.all ? "all" : body?.folderId };
@@ -457,7 +457,17 @@ test(
 test(
   "email_forward",
   await client.callTool("email_forward", { messageId: 1, to: "c@d.com", body: "FYI" }),
-  (r) => r.success
+  (r) => r.success && r.inline === false && r.action === "draft_saved"
+);
+test(
+  "email_forward inline",
+  await client.callTool("email_forward", { messageId: 1, to: "c@d.com", body: "FYI", inline: true }),
+  (r) => r.success && r.inline === true && r.action === "draft_saved"
+);
+test(
+  "email_forward explicit attachment mode",
+  await client.callTool("email_forward", { messageId: 1, to: "c@d.com", inline: false }),
+  (r) => r.success && r.inline === false
 );
 
 test(

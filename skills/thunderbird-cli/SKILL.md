@@ -51,7 +51,7 @@ Use these; don't reach for the 38-command CLI unless the user explicitly asks fo
 | `email_thread` | Full conversation thread for a message | ✅ read-only |
 | `email_compose` | New message. `mode: draft` / `open` / `send`. Defaults to `draft` | ✅ draft by default |
 | `email_reply` | Reply to a message. Same modes. Defaults to `draft` | ✅ draft by default |
-| `email_forward` | Forward to a new recipient. Same modes. Defaults to `draft` | ✅ draft by default |
+| `email_forward` | Forward to a new recipient. Optional `inline: true`; otherwise attached message. Defaults to `draft` | ✅ draft by default |
 | `email_mark` | Set read / unread / flagged / unflagged / junk / not-junk; add/remove tags (`addTags`, `removeTags`) or replace them (`tags`) (batch supported) | ✅ reversible |
 | `email_archive` | `operation: archive / move / delete`. `delete` requires `permanent` + `confirm` | ⚠️ confirm for permanent |
 | `email_attachments` | List attachments, or download one (single or `--all`) | ✅ read-only |
@@ -284,7 +284,7 @@ MCP tool → CLI command mapping:
 | `email_read` | `tb read <id>` |
 | `email_compose` | `tb compose --to X --subject Y --body Z` |
 | `email_reply` | `tb reply <id> --body "..."` |
-| `email_forward` | `tb forward <id> --to X` |
+| `email_forward` | `tb forward <id> --to X [--inline]` |
 | `email_archive` | `tb archive <id>` / `tb move <id> <folder>` / `tb delete <id>` |
 
 ## Version
