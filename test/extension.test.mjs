@@ -12,6 +12,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { randomBytes } from "crypto";
 import vm from "vm";
+import assert from "node:assert/strict";
 
 const EXT = join(dirname(fileURLToPath(import.meta.url)), "..", "extension");
 const manifest = JSON.parse(readFileSync(join(EXT, "manifest.json"), "utf-8"));
@@ -100,7 +101,13 @@ const messenger = {
     saveMessage: async () => {},
     sendMessage: async () => {},
   },
-  tabs: { remove: async () => {} },
+  tabs: {
+    remove: async () => {},
+    executeScript: async (tabId, { code }) => {
+      calls.compose.push({ op: "insert", tabId, code });
+      return [true];
+    },
+  },
   accounts: {
     list: async () => [
       { id: "account1", name: "Work", type: "imap", rootFolder: null,
@@ -563,10 +570,91 @@ test("text attachments are listed", parts.attachments.map((a) => a.partName).joi
 
 calls.compose.length = 0;
 await handle("POST", "/reply", { messageId: 5, body: "Thanks!", draft: true });
-const set = calls.compose.find((c) => c.op === "set");
-test("reply keeps Thunderbird's quotation", set?.details.plainTextBody === "Thanks!\n\n> quoted original");
+const inserted = calls.compose.find((c) => c.op === "insert");
+test("reply inserts only the new text", inserted?.code.includes(JSON.stringify("Thanks!\n\n")));
+test("reply does not replace Thunderbird's quotation", !calls.compose.some((c) => c.op === "set"));
 test("reply opens the native reply without replacing its body",
   !("plainTextBody" in (calls.compose.find((c) => c.op === "beginReply")?.details || {})));
+
+// Execute the injected script against an editor fixture, retaining native node identity.
+{
+  const savedCompose = { ...messenger.compose }, savedTabs = { ...messenger.tabs };
+  const image = { src: "imap://original-inline-image", complete: true };
+  const quote = { image }, editorBody = { childNodes: [quote], focus() {} };
+  let plain, selectedBody, collapsed, selectedRange, commandResult = true, scriptResult;
+  const insertions = [], parsed = [];
+  const editor = {
+    body: editorBody,
+    createRange: () => ({ selectNodeContents(body) { selectedBody = body; }, collapse(start) { collapsed = start; } }),
+    execCommand(command, ui, content) {
+      assert.equal(selectedBody, editorBody); assert.equal(collapsed, true); assert(selectedRange);
+      assert.equal(ui, false);
+      insertions.push({ command, content });
+      if (commandResult) editorBody.childNodes.unshift({ content });
+      return commandResult;
+    },
+  };
+  const escape = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  ctx.DOMParser = class {
+    parseFromString(html) {
+      parsed.push(html);
+      return {
+        body: { childNodes: html ? [{ outerHTML: html }] : [] },
+        importNode: node => node,
+        createElement: tag => ({
+          children: [], style: {}, textContent: '',
+          append(node) { this.children.push(node); },
+          get outerHTML() {
+            const style = this.style.whiteSpace ? ` style="white-space: ${this.style.whiteSpace};"` : '';
+            return `<${tag}${style}>${escape(this.textContent)}${this.children.map(c => c.outerHTML).join('')}</${tag}>`;
+          },
+        }),
+      };
+    }
+  };
+  messenger.compose.getComposeDetails = async () => ({ isPlainText: plain,
+    body: '<blockquote><img src="imap://original-inline-image"></blockquote>', plainTextBody: '> quotation' });
+  messenger.compose.setComposeDetails = async () => { throw Error('Original quotation must not be replaced'); };
+  messenger.compose.saveMessage = async () => { calls.compose.push({ op: 'save' }); };
+  messenger.compose.sendMessage = async () => { calls.compose.push({ op: 'send' }); };
+  messenger.tabs.remove = async () => { calls.compose.push({ op: 'close' }); };
+  messenger.tabs.executeScript = async (tabId, { code }) => {
+    assert.equal(tabId, 2);
+    const result = vm.runInNewContext(code, { document: editor,
+      window: { getSelection: () => ({ removeAllRanges() { selectedRange = null; }, addRange(r) { selectedRange = r; } }) } });
+    return scriptResult ?? [result];
+  };
+  try {
+    for (const [isPlainText, isHTML, body, command, expected] of [
+      [true, false, 'First\nSecond', 'insertText', 'First\nSecond\n\n'],
+      [false, false, 'First\nSecond\n\n<&>', 'insertHTML', '<div><p style="white-space: pre-wrap;">First\nSecond</p><p style="white-space: pre-wrap;">&lt;&amp;&gt;</p></div>'],
+      [false, true, '<b>Answer</b>', 'insertHTML', '<div><b>Answer</b></div>'],
+    ]) {
+      plain = isPlainText; insertions.length = 0; parsed.length = 0; editorBody.childNodes = [quote];
+      await handle('POST', '/reply', { messageId: 5, body, isHTML, open: true });
+      test(`native ${plain ? 'plain' : isHTML ? 'HTML' : 'text-in-HTML'} reply inserts exact content`,
+        insertions.length === 1 && insertions[0].command === command && insertions[0].content === expected);
+      test('quoted image node remains intact', editorBody.childNodes.at(-1) === quote && quote.image === image && image.complete);
+      test('original quote is never parsed or serialized', !parsed.some(html => html.includes('original-inline-image')));
+    }
+    for (plain of [true, false]) {
+      insertions.length = 0;
+      await handle('POST', '/reply', { messageId: 5, body: '', open: true });
+      test('empty reply leaves the editor untouched', insertions.length === 0);
+    }
+    storageData.sendPolicy = { allowSend: true };
+    for (const [commandOk, results] of [[false, undefined], [true, []], [true, [false]]]) {
+      commandResult = commandOk; scriptResult = results; calls.compose.length = 0;
+      let error;
+      try { await handle('POST', '/reply', { messageId: 5, body: 'Answer', send: true }); } catch (e) { error = e; }
+      test('failed/unconfirmed insertion identifies the open reply', /Reply tab 2.*inspect it/.test(error?.message));
+      test('failed insertion never sends, saves or closes', !calls.compose.some(c => ['send', 'save', 'close'].includes(c.op)));
+    }
+  } finally {
+    Object.assign(messenger.compose, savedCompose); Object.assign(messenger.tabs, savedTabs);
+    delete ctx.DOMParser; delete storageData.sendPolicy;
+  }
+}
 
 calls.compose.length = 0;
 await handle("POST", "/compose", { to: "a@example.org", subject: "s", body: "b", priority: "high", draft: true });
@@ -630,7 +718,7 @@ calls.compose.length = 0;
 await handle("POST", "/reply", { messageId: 5, body: "see attached", attachments: [pdf], draft: true });
 const ops = calls.compose.map((c) => c.op);
 test("reply adds attachments after preparing the quoted body",
-  ops.indexOf("addAttachment") > ops.indexOf("set") && calls.compose.find((c) => c.op === "addAttachment")?.att.file.name === "invoice.pdf");
+  ops.indexOf("insert") >= 0 && ops.indexOf("addAttachment") > ops.indexOf("insert") && calls.compose.find((c) => c.op === "addAttachment")?.att.file.name === "invoice.pdf");
 calls.compose.length = 0;
 await handle("POST", "/forward", { messageId: 5, to: "x@example.org", attachments: [pdf], draft: true });
 test("forward keeps the forwarded message and adds files separately",
