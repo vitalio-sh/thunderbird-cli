@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Replies insert new content into Thunderbird's native editor without rebuilding the original quotation, preserving quoted inline images and single line breaks. Empty reply text leaves the quotation untouched; failed insertions leave the composer open for inspection instead of saving or sending incomplete content.
+
 ## [1.2.0] — 2026-11-12
 
 npm packages 1.2.0; Thunderbird extension 2.2.0. **Direct sending is now off by default** (see Changed).

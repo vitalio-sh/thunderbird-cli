@@ -89,6 +89,27 @@ function scheduleReconnect() {
   }, delay);
 }
 
+// Insert only the reply text: replacing the whole quote loses native inline-image state.
+async function prependReplyContent(tabId, content, isPlainText = false) {
+  function insert(content, isPlainText) {
+    const range = document.createRange();
+    range.selectNodeContents(document.body);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    document.body.focus();
+    if (!document.execCommand(isPlainText ? "insertText" : "insertHTML", false, content)) {
+      throw new Error("Could not insert text into the native compose editor");
+    }
+    return true;
+  }
+  const result = await messenger.tabs.executeScript(tabId, {
+    code: `(${insert.toString()})(${JSON.stringify(content)}, ${JSON.stringify(isPlainText)})`,
+  });
+  if (result.length !== 1 || result[0] !== true) throw new Error("Reply insertion was not confirmed");
+}
+
 // Start connection
 connect();
 
@@ -577,8 +598,8 @@ async function handleRequest({ method, path, body }) {
     const tab = await messenger.compose.beginReply(messageId, type, isHTML ? { isPlainText: false } : {});
     try {
       const original = await messenger.compose.getComposeDetails(tab.id);
-      if (!original.isPlainText) {
-        const doc = new DOMParser().parseFromString(original.body || "", "text/html");
+      if (replyBody && !original.isPlainText) {
+        const doc = new DOMParser().parseFromString("", "text/html");
         const intro = doc.createElement("div");
         if (isHTML) {
           // Parse into a separate inert document and import the nodes (no innerHTML).
@@ -587,15 +608,13 @@ async function handleRequest({ method, path, body }) {
         }
         else for (const paragraph of replyBody.trim().split(/\n\s*\n/)) {
           const p = doc.createElement("p");
-          p.textContent = paragraph.replace(/\s*\n\s*/g, " ");
+          p.textContent = paragraph;
+          p.style.whiteSpace = "pre-wrap";
           intro.append(p);
         }
-        doc.body.prepend(intro);
-        await messenger.compose.setComposeDetails(tab.id, { body: doc.documentElement.outerHTML });
-      } else {
-        await messenger.compose.setComposeDetails(tab.id, {
-          plainTextBody: replyBody + "\n\n" + (original.plainTextBody || ""),
-        });
+        await prependReplyContent(tab.id, intro.outerHTML);
+      } else if (replyBody) {
+        await prependReplyContent(tab.id, replyBody + "\n\n", true);
       }
       for (const file of replyFiles) await messenger.compose.addAttachment(tab.id, { file });
     } catch (error) {
