@@ -138,6 +138,13 @@ for (const [label, name] of [["a path outside the folder", join(HOME, "outside.t
 seen = since();
 await tb("forward", "5", "--to", "x@y.z", "--attach", "report.pdf");
 test("forward carries attachments", seen().find((q) => q.path === "/forward")?.body.attachments?.[0]?.name === "report.pdf");
+test("forward remains attachment-based by default", seen().find((q) => q.path === "/forward")?.body.inline !== true);
+seen = since();
+const inlineForward = await tb("forward", "5", "--to", "x@y.z", "--inline", "--body", "FYI\nnext line", "--attach", "report.pdf");
+const inlinePayload = seen().find((q) => q.path === "/forward")?.body;
+test("forward --inline keeps the note, attachments and draft default", inlineForward.code === 0 &&
+  inlinePayload?.inline === true && inlinePayload.body === "FYI\nnext line" && inlinePayload.draft === true &&
+  inlinePayload.attachments?.[0]?.name === "report.pdf");
 const listing = await tb("attachable");
 const listed = (listing.json?.data ?? listing.json)?.files?.map((f) => f.name);
 test("attachable lists only regular, visible files", JSON.stringify(listed) === '["report.pdf"]', listing.out);

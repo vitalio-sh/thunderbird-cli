@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Optional inline forwarding: CLI `tb forward --inline` and MCP `email_forward` with `inline: true`. Uses Thunderbird's native inline quotation and attachments, with an optional plain-text note. Forwarding as an attached message and saving as a draft remain the defaults.
+
 ## [1.2.0] — 2026-11-12
 
 npm packages 1.2.0; Thunderbird extension 2.2.0. **Direct sending is now off by default** (see Changed).

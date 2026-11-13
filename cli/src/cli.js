@@ -654,6 +654,7 @@ program
   .command("forward <messageId>")
   .description("Forward a message")
   .requiredOption("--to <address>", "forward to")
+  .option("--inline", "forward inline instead of as an attached message")
   .option("--body <text>", "additional text")
   .option("--attach <name>", "attach a file from the attachments folder (repeatable; see tb attachable)", (v, acc) => [...acc, v], [])
   .option("--draft", "save as draft (default)")
@@ -678,6 +679,7 @@ program
       payload.draft = true;
     }
 
+    if (opts.inline) payload.inline = true;
     const data = await api("POST", "/forward", payload, getTimeout(g));
     output(data, g.format, getOutputOpts(g));
   }));

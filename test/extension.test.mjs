@@ -12,6 +12,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { randomBytes } from "crypto";
 import vm from "vm";
+import assert from "node:assert/strict";
 
 const EXT = join(dirname(fileURLToPath(import.meta.url)), "..", "extension");
 const manifest = JSON.parse(readFileSync(join(EXT, "manifest.json"), "utf-8"));
@@ -634,8 +635,94 @@ test("reply adds attachments after preparing the quoted body",
 calls.compose.length = 0;
 await handle("POST", "/forward", { messageId: 5, to: "x@example.org", attachments: [pdf], draft: true });
 test("forward keeps the forwarded message and adds files separately",
+  calls.compose.find((c) => c.op === "beginForward")?.type === "forwardAsAttachment" &&
   !calls.compose.find((c) => c.op === "beginForward")?.details.attachments &&
   calls.compose.find((c) => c.op === "addAttachment")?.tabId === 3);
+
+// Run the injected note code, retaining the original quote/image objects.
+{
+  const originalCompose = { ...messenger.compose };
+  const originalTabs = { ...messenger.tabs };
+  const quote = { image: { src: "mailbox:///original?part=1.2" } };
+  let nodes, inserted, plain = false, insertionWorks = true, emptyResult = false;
+  const body = { focus() {}, get childNodes() { return nodes; } };
+  const range = {
+    selectNodeContents(target) { assert.equal(target, body); },
+    collapse(start) { assert.equal(start, true); },
+  };
+  messenger.compose.getComposeDetails = async () => ({ isPlainText: plain });
+  for (const op of ["saveMessage", "sendMessage"]) {
+    messenger.compose[op] = async () => calls.compose.push({ op });
+  }
+  messenger.tabs.remove = async () => calls.compose.push({ op: "close" });
+  messenger.tabs.executeScript = async (tabId, { code }) => {
+    assert.equal(tabId, 3);
+    const document = {
+      body, createRange: () => range,
+      createElement(tag) {
+        assert.equal(tag, "div");
+        return { style: {}, textContent: "", get outerHTML() {
+          assert.equal(this.style.whiteSpace, "pre-wrap");
+          assert.equal(this.style.marginBottom, "1em");
+          return `<div>${this.textContent.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</div>`;
+        } };
+      },
+      execCommand(command, ui, content) {
+        inserted = { command, content };
+        if (insertionWorks) nodes.unshift({ content });
+        return insertionWorks;
+      },
+    };
+    const window = { getSelection: () => ({ removeAllRanges() {}, addRange(r) { assert.equal(r, range); } }) };
+    return emptyResult ? [] : [vm.runInNewContext(code, { document, window })];
+  };
+  const reset = () => { calls.compose.length = 0; nodes = [quote]; inserted = null; };
+  for (const isPlain of [false, true]) {
+    plain = isPlain;
+    reset();
+    await handle("POST", "/forward", { messageId: 5, to: "x@example.org", inline: true,
+      body: "FYI <tag> & \"quote\"\nnext line", attachments: [pdf] });
+    const begin = calls.compose.find((c) => c.op === "beginForward");
+    test(`inline forward preserves native content (${plain ? "text" : "HTML"})`,
+      begin.type === "forwardInline" && !Object.hasOwn(begin.details, "body") &&
+      !Object.hasOwn(begin.details, "plainTextBody") && !Object.hasOwn(begin.details, "attachments") &&
+      begin.details.cc.length === 0 && begin.details.bcc.length === 0 &&
+      nodes.length === 2 && nodes[1] === quote && nodes[1].image === quote.image &&
+      !calls.compose.some((c) => c.op === "set") &&
+      calls.compose.some((c) => c.op === "addAttachment") && calls.compose.some((c) => c.op === "saveMessage"));
+    test(`inline note preserves text and line breaks (${plain ? "text" : "HTML"})`,
+      inserted.command === (plain ? "insertText" : "insertHTML") &&
+      inserted.content === (plain ? 'FYI <tag> & "quote"\nnext line\n\n' : '<div>FYI &lt;tag&gt; &amp; "quote"\nnext line</div>'));
+  }
+  reset();
+  const opened = await handle("POST", "/forward", { messageId: 5, to: "x@example.org", inline: true, open: true });
+  test("inline without a note leaves the editor untouched and open", opened.tabId === 3 && !inserted && nodes[0] === quote &&
+    !calls.compose.some((c) => ["saveMessage", "sendMessage", "close"].includes(c.op)));
+  for (const bad of [{ inline: "true" }, { inline: true, body: {} }]) {
+    reset();
+    await assert.rejects(handle("POST", "/forward", { messageId: 5, to: "x@example.org", ...bad }), { code: "INVALID_ARGS" });
+    test("invalid inline input opens no composer", calls.compose.length === 0);
+  }
+  reset();
+  await assert.rejects(handle("POST", "/forward", { messageId: 5, to: "x@example.org", inline: true, send: true }), { code: "SEND_DISABLED" });
+  test("inline forwarding respects the send block", calls.compose.length === 0);
+  storageData.sendPolicy = { allowSend: true };
+  for (const failure of ["insert", "missing result", "attachment"]) {
+    insertionWorks = failure !== "insert";
+    emptyResult = failure === "missing result";
+    messenger.compose.addAttachment = failure === "attachment" ? async () => { throw new Error("attachment failed"); } : originalCompose.addAttachment;
+    for (const send of [false, true]) {
+      reset();
+      await assert.rejects(handle("POST", "/forward", { messageId: 5, to: "x@example.org", inline: true,
+        body: "FYI", attachments: [pdf], send }), /Forward tab 3 is open but preparation failed/);
+      test(`${failure} failure cannot save, send or close the forward`,
+        !calls.compose.some((c) => ["saveMessage", "sendMessage", "close"].includes(c.op)));
+    }
+  }
+  delete storageData.sendPolicy;
+  Object.assign(messenger.compose, originalCompose);
+  messenger.tabs = originalTabs;
+}
 for (const [label, att] of [
   ["a path as name", { name: "../../etc/passwd", data: "AAAA" }],
   ["invalid base64", { name: "x.txt", data: "not base64!" }],

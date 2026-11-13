@@ -174,9 +174,16 @@ tb reply <messageId> [options]
 tb forward <messageId> [options]
   --to <address>           # required
   --body <text>            # additional text
-  --attach <name>          # repeatable; the forwarded message stays attached
+  --inline                 # native inline forward; default: attached message
+  --attach <name>          # repeatable; preserves native forwarding attachments
   --draft / --open / --send
 ```
+
+`tb forward --inline` keeps Thunderbird's quoted message and attachments. `--body`
+adds plain text above the quotation, preserving line breaks. Without `--inline`,
+the original message is forwarded as an attachment. Both modes default to a draft.
+If note insertion or attachment preparation fails, the compose window stays open
+for inspection; the command does not save or send it.
 
 ### Sending attachments (safe folder)
 

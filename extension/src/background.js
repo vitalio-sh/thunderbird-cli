@@ -110,7 +110,7 @@ if (typeof messenger !== "undefined" && messenger.idle?.onStateChanged) {
 async function handleRequest({ method, path, body }) {
   if (body != null) {
     if (typeof body !== "object" || Array.isArray(body)) throw invalidArgs("body must be an object");
-    for (const key of ["send", "draft", "open", "isHTML", "replyAll", "read", "flagged", "junk",
+    for (const key of ["send", "draft", "open", "isHTML", "replyAll", "inline", "read", "flagged", "junk",
       "unreadOnly", "hasAttachment", "includeJunk"]) {
       if (body[key] !== undefined && typeof body[key] !== "boolean") throw invalidArgs(`${key} must be boolean`);
     }
@@ -618,14 +618,46 @@ async function handleRequest({ method, path, body }) {
 
   if (path === "/forward" && method === "POST") {
     const { messageId, to, body: fwdBody,
-            send = false, draft = false, open = false } = body;
+            inline = false, send = false, draft = false, open = false } = body;
+    if (fwdBody !== undefined && typeof fwdBody !== "string") throw invalidArgs("body must be a string");
     const forwardFiles = decodeAttachments(body.attachments); // validate before opening a tab
+    const recipients = Array.isArray(to) ? to : [to];
     const tab = await messenger.compose.beginForward(
-      messageId, "forwardAsAttachment",
-      { to: Array.isArray(to) ? to : [to], isPlainText: true, plainTextBody: fwdBody || "" }
+      messageId, inline ? "forwardInline" : "forwardAsAttachment",
+      inline ? { to: recipients, cc: [], bcc: [] } :
+        { to: recipients, isPlainText: true, plainTextBody: fwdBody || "" }
     );
-    // Added after beginForward so the forwarded message itself stays attached.
-    for (const file of forwardFiles) await messenger.compose.addAttachment(tab.id, { file });
+    try {
+      if (inline && fwdBody) {
+        const { isPlainText } = await messenger.compose.getComposeDetails(tab.id);
+        // Insert only the note; replacing the body can break native quoted images.
+        const results = await messenger.tabs.executeScript(tab.id, {
+          code: `(${function (note, plain) {
+            const range = document.createRange();
+            range.selectNodeContents(document.body);
+            range.collapse(true);
+            document.body.focus();
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(range);
+            let content = note + "\n\n";
+            if (!plain) {
+              const block = document.createElement("div");
+              block.textContent = note;
+              block.style.whiteSpace = "pre-wrap";
+              block.style.marginBottom = "1em";
+              content = block.outerHTML;
+            }
+            return document.execCommand(plain ? "insertText" : "insertHTML", false, content);
+          }.toString()})(${JSON.stringify(fwdBody)}, ${JSON.stringify(isPlainText)})`,
+        });
+        if (results?.length !== 1 || results[0] !== true) throw new Error("Could not insert the forwarding note");
+      }
+      // Add files without replacing Thunderbird's native forwarding attachments.
+      for (const file of forwardFiles) await messenger.compose.addAttachment(tab.id, { file });
+    } catch (error) {
+      throw new Error(`Forward tab ${tab.id} is open but preparation failed; inspect it before retrying: ${error.message}`);
+    }
     if (send) {
       await messenger.compose.sendMessage(tab.id, { mode: "sendNow" });
       return { success: true, action: "sent" };

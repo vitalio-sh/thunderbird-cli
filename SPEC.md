@@ -397,10 +397,17 @@ tb reply <messageId> [options]
 tb forward <messageId> [options]
   --to <address>           # required
   --body <text>            # additional message
+  --inline                 # native inline quotation; default: attached message
   --draft                  # default
   --open
   --send
 ```
+
+`POST /forward` accepts optional boolean `inline` (default `false`), also exposed
+as MCP `email_forward.inline`. Inline mode uses `beginForward(..., "forwardInline")`
+without replacing the native body or attachments. The optional `body` is a
+plain-text note inserted before the quotation, not HTML. Preparation errors leave
+the composer open and do not save or send. Existing account and send checks apply.
 
 ### 13. Attachments
 

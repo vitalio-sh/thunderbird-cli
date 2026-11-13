@@ -393,6 +393,7 @@ export const tools = [
         messageId: { type: "integer", minimum: 1, description: "Message ID to forward" },
         to: { type: "string", description: "Recipient address" },
         body: { type: "string", description: "Optional additional text" },
+        inline: { type: "boolean", default: false, description: "Forward inline, preserving Thunderbird's quotation and attachments. Default: forward as an attached message." },
         attachments: {
           type: "array",
           maxItems: 20,
@@ -421,6 +422,7 @@ export const tools = [
       if (mode === "send") payload.send = true;
       else if (mode === "open") payload.open = true;
       else payload.draft = true;
+      if (args.inline !== undefined) payload.inline = args.inline;
       return await api("POST", "/forward", payload);
     },
   },
