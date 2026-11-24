@@ -261,16 +261,21 @@ async function handleRequest({ method, path, body }) {
       if (sizeMax != null) q.size.max = sizeMax;
     }
 
+    // messages.query returns database order, not date order (see #15): sort every match newest
+    // first before `limit` is applied, otherwise a broad search returns the oldest matches.
+    const newestFirst = (a, b) => new Date(b.date) - new Date(a.date);
+    const run = () => collectMessages(() => messenger.messages.query(q), limit,
+      { accept: visibleMsg, compare: newestFirst });
     let result;
     try {
-      result = await collectMessages(() => messenger.messages.query(q), limit, { accept: visibleMsg });
+      result = await run();
     } catch (e) {
       if (mode !== "fulltext") throw e;
       // Older Thunderbird without fullText support: fall back to a body scan.
       delete q.fullText;
       q.body = query;
       mode = "body";
-      result = await collectMessages(() => messenger.messages.query(q), limit, { accept: visibleMsg });
+      result = await run();
     }
     if (mode) result.searchMode = mode;
     return result;

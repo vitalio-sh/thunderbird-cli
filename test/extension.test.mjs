@@ -371,6 +371,20 @@ test("tag is passed to native query", calls.query.some((q) => q.tags?.mode === "
 test("size range is passed to native query", calls.query.some((q) => q.size?.min === 100 && q.size?.max === 100));
 queryHandlers.length = 0;
 
+// messages.query returns database order (roughly oldest first, see #15), so cutting at `limit`
+// before sorting returns the oldest matches instead of the newest.
+const olderHit = header(30, { date: date("2025-01-01T00:00:00Z") });
+const newerHit = header(31, { date: date("2026-06-01T00:00:00Z") });
+queryHandlers.push(() => ({ messages: [olderHit, newerHit] }));
+const newestFirst = await handle("POST", "/messages/search", { query: "invoice", limit: 1 });
+test("search returns the newest match when cut at limit",
+  JSON.stringify(newestFirst.messages.map((m) => m.id)) === "[31]", JSON.stringify(newestFirst.messages.map((m) => m.id)));
+test("search cut at limit reports hasMore", newestFirst.hasMore === true, JSON.stringify(newestFirst));
+const bothHits = await handle("POST", "/messages/search", { subject: "x", limit: 5 });
+test("search results are ordered newest first", JSON.stringify(bothHits.messages.map((m) => m.id)) === "[31,30]",
+  JSON.stringify(bothHits.messages.map((m) => m.id)));
+queryHandlers.length = 0;
+
 console.log("\n\x1b[1mCollector pagination\x1b[0m");
 const previousContinue = messenger.messages.continueList;
 const previousAbort = messenger.messages.abortList;

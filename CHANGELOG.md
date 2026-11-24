@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `email_search` / `POST /messages/search` returned the *oldest* matches whenever there were more than `limit`: `messages.query` yields database order, and the result was cut before sorting (same cause as #15 for `/messages/list`). Matches are now sorted newest first before `limit` is applied.
+
 ## [1.2.0] — 2026-11-12
 
 npm packages 1.2.0; Thunderbird extension 2.2.0. **Direct sending is now off by default** (see Changed).
